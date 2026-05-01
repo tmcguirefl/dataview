@@ -5,6 +5,78 @@
 **jlearn library:** `/Users/tomdevel/jdev/jlearn`  
 **Repository root:** `/Users/tomdevel/jdev/dataview`  
 
+## Environment
+
+| Item | Value |
+|---|---|
+| J version | `j9.8.0-beta1/j64arm/darwin` (Apple Silicon, macOS) |
+| J install path | `/Applications/j9.8/` |
+| Executable | `/Applications/j9.8/bin/jconsole` (symlinked as `ijconsole`) |
+| PATH addition | `/Applications/j9.8/bin` |
+| Start server | `ijconsole src/init.ijs` (from `dataview/`) |
+| Architecture | `j64arm` — Apple Silicon native, SLEEF SIMD math |
+
+Add to shell profile (`~/.zshrc`) once:
+```sh
+export PATH="/Applications/j9.8/bin:$PATH"
+```
+
+### Confirmed Working Addons (tested in J9.8)
+
+| Addon | `require` path | Status |
+|---|---|---|
+| SQLite (JDD) | `data/ddsqlite` | ✓ opens/creates db, `setzlocale_jddsqlite_''` exports verbs to `_z_` |
+| LAPACK/SVD | `math/lapack2` | ✓ |
+| CSV | `tables/csv` | ✓ |
+| pjson (JHS built-in) | `convert/pjson` | ✓ |
+| JSON | `convert/json` | ✓ |
+| Stats | `stats/base` | ✓ |
+| Base64 | `convert/base64` | ✗ **not installed** — token encoding needs alternative |
+| SHA/crypto | `security/sha` | ✗ **not installed** — use `128!:6` (SHA-1, built-in) |
+
+### Hashing: `128!:6` is SHA-1 (Built-in, No Addon Needed)
+
+`128!:6 y` is available natively in J9.8 with no `require`. It returns a 40-character hex SHA-1 digest. There is no built-in SHA-256. For password hashing in a local single-user tool, SHA-1 with a random salt is acceptable. The salt+hash are stored together in the `users` table.
+
+```j
+NB. Generate a random 16-byte hex salt
+salt =: , 16 ?@$ 256
+saltstr =: , '0123456789abcdef' {~ ,: (salt >: 16) + 16 | salt   NB. hex encode
+
+NB. Hash: SHA-1(salt || password)  — 40 hex chars
+hashpw =: 3 : '128!:6 saltstr , y'
+```
+
+For session tokens, base64 is unavailable as an addon. Use hex encoding instead:
+```j
+NB. Build token: hex(userid) || '_' || hex(timestamp) || '_' || SHA1(secret||userid||ts)
+```
+
+### `data/ddsqlite` Correct Usage (verified on J9.8)
+
+```j
+require 'data/ddsqlite'
+setzlocale_jddsqlite_ ''      NB. exports ddcon, ddsql, ddsel, ddparm, etc. to _z_
+
+NB. Open (or create) a database — nocreate=0 is required to create a new file
+db =. ddcon 'database=/path/to/modelscope.db;nocreate=0'
+
+NB. Execute DDL / DML
+'CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT)' ddsql__db ''
+
+NB. Parameterized insert — prevents SQL injection
+'INSERT INTO users (username) VALUES (?)' ddparm__db (SQLITE_TEXT ; ,< 'alice')
+
+NB. Select
+db ddsel__db 'SELECT id, username FROM users'
+rows =. ddfet__db ''          NB. all rows as boxed matrix
+
+NB. Disconnect
+dddis__db ''
+```
+
+**Key gotcha:** `ddcon` returns `_1` on failure (file not found and `nocreate=1`, which is the default). Always pass `nocreate=0` when creating a new database file.
+
 ---
 
 ## 1. Project Layout
@@ -301,35 +373,97 @@ password =. 'password' getfield body
 
 ## 4. Data Storage Design
 
-Since there is no database, all state lives in J locales during the session. On server start, `db.ijs` defines two "tables" as named locale arrays:
+State is persisted in a SQLite database via `data/ddsqlite`. The file lives at `data/modelscope.db` (gitignored). `db.ijs` opens (or creates) it on startup and runs `CREATE TABLE IF NOT EXISTS` for each table — the same `ensureSchema` pattern used by the Node.js reference.
 
-```j
-NB. Each user: id ; username ; pwhash ; salt ; displayname ; email
-USERS =: 0 6 $ ''
+### Schema
 
-NB. Each dataset: id ; userid ; name ; notes ; tags ; qualityReport ; rawData ; rowMeta ; colNames ; quantCols ; catCols
-DATASETS =: 0 11 $ ''   NB. values are boxed
+```sql
+CREATE TABLE IF NOT EXISTS users (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  username    TEXT UNIQUE NOT NULL,
+  pwhash      TEXT NOT NULL,        -- SHA-1(salt||password) hex
+  salt        TEXT NOT NULL,        -- 32-char hex random salt
+  displayname TEXT DEFAULT '',
+  email       TEXT DEFAULT '',
+  created_at  TEXT DEFAULT (datetime('now'))
+);
 
-NB. Each PCA run: id ; datasetid ; nComponents ; explainedVariance ; allEV ; loadings ; transformedData ; colNames ; nSamples ; preprocOptions ; preprocReport ; rowIndexes ; notes ; isPinned
-PCA_RUNS =: 0 14 $ ''
+CREATE TABLE IF NOT EXISTS datasets (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  notes           TEXT DEFAULT '',
+  tags            TEXT DEFAULT '[]',       -- JSON array of strings
+  is_favorite     INTEGER DEFAULT 0,
+  row_count       INTEGER,
+  col_count       INTEGER,
+  quant_cols      TEXT DEFAULT '[]',       -- JSON array
+  cat_cols        TEXT DEFAULT '[]',       -- JSON array
+  all_cols        TEXT DEFAULT '[]',       -- JSON array
+  raw_data        TEXT,                    -- JSON: n×m numeric matrix
+  row_metadata    TEXT,                    -- JSON: per-row labels/originals
+  quality_report  TEXT,                    -- JSON: quality profile
+  preview_data    TEXT,                    -- JSON: first 10 rows
+  upload_ts       TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS pca_runs (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  dataset_id      INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+  notes           TEXT DEFAULT '',
+  is_pinned       INTEGER DEFAULT 0,
+  n_components    INTEGER NOT NULL,
+  explained_var   TEXT,    -- JSON array: per-component fractions
+  all_ev          TEXT,    -- JSON array: all eigenvalues (scree plot)
+  loadings        TEXT,    -- JSON: k×n_features matrix
+  transformed     TEXT,    -- JSON: n_samples×k projected points
+  col_names       TEXT,    -- JSON array: feature names used
+  n_samples       INTEGER,
+  preproc_opts    TEXT,    -- JSON: preprocessing config
+  preproc_report  TEXT,    -- JSON: per-step counts
+  row_indexes     TEXT,    -- JSON array: original row indexes surviving preprocessing
+  created_at      TEXT DEFAULT (datetime('now'))
+);
 ```
 
-Persistence: on graceful shutdown `db.ijs` serializes all three globals to `dataview/data/db.ijs` (a loadable J script via `3!:1`). On startup `init.ijs` loads it if it exists.
+### `db.ijs` Pattern
+
+```j
+NB. db.ijs  — opens/creates SQLite; DB global holds the connection handle
+require 'data/ddsqlite'
+setzlocale_jddsqlite_ ''
+
+DB_PATH =: jpath '~/../data/modelscope.db'   NB. relative to J home; adjust as needed
+
+db_open =: 3 : 0
+  DB =: ddcon 'database=', DB_PATH, ';nocreate=0'
+  if. _1 = DB do. echo 'FATAL: cannot open database' [ exit'' end.
+  db_ensure_schema ''
+)
+
+db_close =: 3 : 0
+  dddis__DB ''
+)
+```
+
+All query verbs (`db_getuser`, `db_insertdataset`, `db_listpcaruns`, etc.) use parameterized `ddparm__DB` calls — never string interpolation into SQL.
 
 ---
 
 ## 5. J Addon Requirements
 
-Install all of these via the J Package Manager before first run:
+All of the following are pre-installed in `/Applications/j9.8/addons/`. No `install` commands needed — just `require` them in `init.ijs`.
 
-| Addon | Install command | Purpose |
-|---|---|---|
-| `math/lapack2` | `install 'math/lapack2'` | SVD + eigendecomposition for PCA |
-| `tables/csv` | `install 'tables/csv'` | CSV file read/write |
-| `convert/json` | `install 'convert/json'` | JSON encode/decode for API |
-| `convert/base64` | `install 'convert/base64'` | Session token encoding |
-| `security/sha` | `install 'security/sha'` | SHA-256 for password hashing and HMAC |
-| `stats/base` | `install 'stats/base'` | Statistical utilities (used by jlearn) |
+| Addon | `require` path | Status | Purpose |
+|---|---|---|---|
+| `math/lapack2` | `require 'math/lapack2'` | ✓ present | SVD + eigendecomposition for PCA via jlearn |
+| `tables/csv` | `require 'tables/csv'` | ✓ present | CSV file read/write |
+| `convert/json` | `require 'convert/json'` | ✓ present | JSON encode for API responses |
+| `convert/pjson` | `require 'convert/pjson'` | ✓ present | JHS built-in JSON decode (`dec_pjson_`) |
+| `stats/base` | `require 'stats/base'` | ✓ present | Statistical utilities (used by jlearn) |
+| `data/ddsqlite` | `require 'data/ddsqlite'` | ✓ present + tested | SQLite persistence |
+| `convert/base64` | — | ✗ **not present** | Use hex encoding for tokens instead |
+| `security/sha` | — | ✗ **not present** | Use built-in `128!:6` (SHA-1) instead |
 
 ---
 
