@@ -12,6 +12,9 @@ docs/.com.microsoft.Edge.*
 docs/.obsidian/workspace.json
 docs/.obsidian/workspace-mobile.json
 
+# Runtime session data (in-memory store snapshots)
+data/
+
 # J session state
 *.ijx
 *.ijs.bak
