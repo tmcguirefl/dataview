@@ -411,3 +411,137 @@ mcp_getfield =: 4 : 0
   r
 )
 ```
+
+---
+
+## Gotchas discovered during ModelScope-J Phase 1 (2026-05)
+
+### `select./case.` string matching hangs in J9.8
+
+String comparisons inside `select./case.` silently hang the server in J9.8. This affects any
+`case. 'literal'` pattern — the code reaches the `select.` line and then the request never
+completes.
+
+**Always use `if./elseif.` chains for string routing:**
+
+```j
+NB. WRONG — hangs in J9.8
+ct =. select. ext
+  case. 'html' do. 'text/html'
+  case. 'js'   do. 'application/javascript'
+  case.         do. 'application/octet-stream'
+end.
+
+NB. CORRECT
+if. 'html' -: ext do.
+  ct =. 'text/html'
+elseif. 'js' -: ext do.
+  ct =. 'application/javascript'
+else.
+  ct =. 'application/octet-stream'
+end.
+```
+
+This applies everywhere: content-type dispatch, route dispatch, method dispatch.
+
+### `r =. x [ return.` anti-pattern
+
+The `[` conjunction evaluates **both** sides. Writing `r =. '' [ return.` fires `return.` but
+also evaluates `r =. ''` — in practice the function does not exit cleanly and may produce
+undefined behavior.
+
+**Pattern to avoid:**
+```j
+if. 0 = nrows do. r =. '' [ return. end.   NB. WRONG
+```
+
+**Correct — separate lines:**
+```j
+if. 0 = nrows do.
+  r =. ''
+  return.
+end.
+```
+
+### `ddfet` — materialize row count before testing
+
+`ddfet` returns a boxed rank-2 array. Testing `# rows` inside an `if.` condition can trigger
+lazy evaluation and hang. Always assign to a variable first:
+
+```j
+rows =. ddfet sh , _1
+nrows =. # rows          NB. materialize before if.
+if. 0 = nrows do.
+  r =. ''
+  return.
+end.
+r =. {. rows
+```
+
+### `ddparm` vs `ddsql` + `sql_esc`
+
+`ddparm` requires a complex three-argument format (sql ; integer-type-vector ; boxed-column-vectors)
+and is easy to get wrong — it silently returns `_1` even with a structurally correct call.
+
+For simple cases, use `ddsql` with a manual `sql_esc` helper that doubles embedded single-quotes:
+
+```j
+sql_esc =: 3 : 0
+  r =. ''
+  i =. 0
+  while. i < # y do.
+    c =. i { y
+    if. c -: '''' do. r =. r , '''' end.
+    r =. r , c
+    i =. >: i
+  end.
+  r
+)
+
+sql =. 'INSERT INTO users (username) VALUES (''' , (sql_esc uname) , ''')'
+rc =. DB ddsql~ sql
+```
+
+### SQL `DEFAULT ''` in J strings
+
+Embedding `DEFAULT ''` inside a J string literal is error-prone. The quoting:
+
+```j
+sql =. sql , ' ,col TEXT DEFAULT '''''
+```
+
+requires four single-quotes to produce two (the SQL `''` empty string), and one extra pair to
+close/reopen the J string — it's easy to produce `DEFAULT '''` (three quotes) which is invalid SQL.
+
+**Simpler fix**: use nullable columns with no DEFAULT for optional text fields. If the application
+needs a default, set it at the application layer instead.
+
+### POST query string is not auto-parsed when RAW=1
+
+When `getdata` sets `RAW=1`, the `QUERY` global is **not** populated — only `NV` (raw body) is set.
+If you POST to `/api?r=register`, the `?r=register` part must be extracted manually from the raw
+request line:
+
+```j
+reqline =. gethv 'POST'    NB. returns '/api?r=register HTTP/1.1'
+qi =. reqline i. '?'
+qs =. (>: qi) }. reqline
+qs =. (qs i. ' ') {. qs   NB. strip trailing ' HTTP/1.1'
+NB. now parse key=value pairs from qs
+```
+
+### `jev_post_raw_api_` stub required for RAW=1
+
+`getdata` sets `RAW=1` only if the verb `jev_post_raw_` concatenated with `URL` and `_` exists
+(checked via `3=nc<'jev_post_raw_',URL,'_'`). J parses `jev_post_raw_api_` as verb name
+`jev_post_raw` in locale `api`.
+
+Even if you dispatch POST requests manually from the main loop, the stub verb **must be defined**:
+
+```j
+jev_post_raw_api_ =: 3 : 0
+  api_post_dispatch''   NB. or any body — just needs to exist
+)
+```
+
+Without this stub, `RAW` stays 0 and `NV` is empty.
