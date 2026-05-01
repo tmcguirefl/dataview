@@ -90,8 +90,8 @@ These are straightforward J expressions and do not need a library:
 | Correlation matrix | `C % %: (*/) C =: cov X` | derived from cov |
 | Column statistics (min, max, mean, std) | `<./ , >./ , (+/ % #) , %: (+/ *:@(- +/%#))` applied `"1 |: X` | built-in |
 | URL decoding (JHS POST bodies) | `jurldecodeplus` (JHS built-in) | JHS |
-| JSON encoding (API responses) | `enc_json` from `convert/json` addon | addon |
-| JSON decoding (POST request bodies) | `dec_json` from `convert/json` addon | addon |
+| JSON encoding (API responses) | `enc_pjson_` (built into JHS) or `enc_json` from `convert/json` addon | JHS built-in preferred |
+| JSON decoding (POST request bodies) | `dec_pjson_ NV_jhs_` — JHS built-in; do **not** use `dec_json` here | JHS built-in; see §3.5 for key-lookup pattern |
 | Password hashing | `sha256` via `security/sha` or `crypt` addon; bcrypt not available natively — use SHA-256 with salt stored alongside | addon |
 | JWT-equivalent session tokens | Stateless: store `userID;timestamp;sha256(userID,timestamp,secret)` as boxed literal, base64-encode with `convert/base64` addon | addon |
 
@@ -136,28 +136,166 @@ Input CSV
 
 ## 3. JHS Routing Architecture
 
-JHS resolves handlers by naming convention. Every API endpoint maps to a J verb in a route locale:
+### 3.1 How JHS Actually Routes Requests
 
-```
-GET  /api/health             →  jev_get_api_health_   in api_health locale
-POST /api/register           →  jev_post_api_register_ in api_auth locale
-POST /api/login              →  jev_post_api_login_    in api_auth locale
-GET  /api/datasets           →  jev_get_api_datasets_  in api_datasets locale
-POST /api/datasets/upload    →  jev_post_api_datasets_upload_  in api_datasets locale
-...
-```
+JHS routing is convention-based, but the naming rules are more constrained than they first appear. When a request arrives:
 
-All handlers return a JSON string. The client always sends `Content-Type: application/json` POST bodies (not form-encoded), decoded in JHS via `dec_json body`.
+- A **raw POST** (body is `application/json`, not form-encoded) sets `RAW=1`. JHS does **not** auto-dispatch raw POSTs via verb naming — the serve loop must check `RAW` and dispatch manually.
+- A **GET** or form POST goes through `input_jhs_` which constructs a verb name from the URL and calls it.
 
-A shared `jhs_respond` helper in `src/routes/api_auth.ijs` sets the content-type header and returns the JSON string:
+**Critical:** `jfe 1` (the JHS event loop) is a no-op under `jconsole -js`. All ModelScope-J endpoints use JSON bodies, so we drive the request loop manually with `getdata''`:
 
 ```j
-NB. Set response content-type to JSON and return payload
-japi_respond =: 3 : 0
-  HTTP_response_header =: 'Content-Type: application/json'
-  y
+NB. In init.ijs — the main serve loop
+app_serve =: 3 : 0
+  OKURL =: 0$<''           NB. must be boxed list before addOKURL
+  jhscfg''                 NB. runs configdefault, then calls config verb
+  logappfile =: <jpath '~user/modelscope.log'
+  IFJHS_z_ =: 1
+  LOCALHOST =: '0.0.0.0'
+  cookie =: 'jcookie=' , ": 6!:0''
+  SKSERVER_jhs_ =: _1
+  r =. dobind''
+  if. 0 ~: r do. echo 'bind failed' [ exit'' end.
+  sdcheck_jsocket_ sdlisten_jsocket_ SKLISTEN , 5
+  addOKURL 'api'           NB. exempt /api/* from login redirect
+  echo 'listening on http://' , LOCALHOST , ':' , (": PORT) , '/api'
+  while. 1 do.
+    try.
+      getdata''            NB. blocks until a connection arrives; sets RAW, URL, METHOD, NV
+      dispatch ''
+    catch. end.
+  end.
+)
+
+NB. Route dispatcher — runs in jhs locale
+dispatch =: 3 : 0
+  NB. All API calls are raw JSON POSTs or GETs
+  if. 1 = RAW do.
+    NB. POST /api/<endpoint>
+    select. URL
+      case. 'api/register'        do. jev_post_raw_api_register_ ''
+      case. 'api/login'           do. jev_post_raw_api_login_ ''
+      case. 'api/datasets/upload' do. jev_post_raw_api_upload_ ''
+      case. 'api/datasets/pca'    do. jev_post_raw_api_pca_ ''
+      NB. ... other POST routes
+      case. do. japi_404 ''
+    end.
+  elseif. 'GET' -: METHOD do.
+    NB. GET /api/<endpoint>
+    select. URL
+      case. 'api/health'    do. jev_get_api_health_ ''
+      case. 'api/datasets'  do. jev_get_api_datasets_ ''
+      NB. ... other GET routes (URL may include query string — strip with i.&'?')
+      case. do. japi_404 ''
+    end.
+  end.
 )
 ```
+
+**Note on URL matching with path parameters:** JHS sets `URL` to the raw path without leading `/`. For routes like `/api/pca/:id`, extract the ID segment manually:
+
+```j
+NB. e.g. URL = 'api/pca/7/clusters'
+parts =. '/' cut URL
+id    =. ". > 3 { parts     NB. numeric id
+```
+
+### 3.2 Handler Locale Pattern
+
+Every handler file defines a coclass and uses `coinsert 'jhs'` so it can call `htmlresponse`, `gethv`, and other JHS verbs without explicit `_jhs_` suffixes **inside** the handler body. However, any access to JHS globals from outside the handler body (e.g. from `db.ijs`) still requires explicit `_jhs_` suffixes.
+
+```j
+NB. src/routes/api_health.ijs
+coclass 'api_health'
+coinsert 'jhs'
+
+jev_get_api_health_ =: 3 : 0
+  japi_ok '{"status":"ok","service":"modelscope-j"}'
+)
+```
+
+The `dispatch` verb (running in `jhs` locale) calls `jev_get_api_health_` directly; the trailing `_` already encodes the locale.
+
+### 3.3 Shared Response Helper
+
+Define a JSON response helper in the `jhs` locale so all routes can call it without a suffix:
+
+```j
+NB. In init.ijs, coclass 'jhs'
+NB. Send a 200 JSON response
+japi_ok =: 3 : 0
+  r =. 'HTTP/1.1 200 OK' , CRLF
+  r =. r , 'Content-Type: application/json' , CRLF
+  r =. r , 'Access-Control-Allow-Origin: *' , CRLF , CRLF
+  r =. r , y
+  htmlresponse r
+)
+
+NB. Send a JSON error response with given HTTP status line
+japi_err =: 4 : 0
+  r =. 'HTTP/1.1 ' , x , CRLF
+  r =. r , 'Content-Type: application/json' , CRLF
+  r =. r , 'Access-Control-Allow-Origin: *' , CRLF , CRLF
+  r =. r , y
+  htmlresponse r
+)
+
+japi_404 =: 3 : 0
+  '404 Not Found' japi_err '{"status":"error","message":"not found"}'
+)
+```
+
+### 3.4 Authentication in Handlers
+
+The token is sent as `Authorization: Bearer <token>`. Read it via `gethv`:
+
+```j
+NB. Returns user id (integer) or _1 if invalid/missing
+japi_checkauth =: 3 : 0
+  hdr =. dltb gethv_jhs_ 'Authorization:'
+  if. 0 = # hdr do. _1 return. end.
+  tok =. dltb (6 + hdr i. ' ') }. hdr    NB. strip 'Bearer '
+  validateToken_auth_ tok
+)
+```
+
+### 3.5 JSON Body Parsing
+
+All POST bodies arrive as raw JSON in `NV_jhs_`. Use `dec_pjson_` (not `dec_json` — `dec_pjson_` is the verb available in JHS):
+
+```j
+body =. dec_pjson_ NV_jhs_
+NB. body is an n×2 boxed matrix: col-0 = rank-1 key strings, col-1 = values
+
+NB. Field lookup helper (see JHSinfo.md for the correct rank-aware pattern):
+getfield =: 4 : 0
+  r =. ''
+  i =. 0
+  nx =. , x               NB. ravel x to rank-1 for -: comparison
+  while. i < # y do.
+    row =. i { y
+    k =. , > 0 { row
+    if. k -: nx do.
+      r =. > 1 { row
+      return.
+    end.
+    i =. >: i
+  end.
+  r                        NB. explicit final expression — not return. with value
+)
+
+NB. Usage:
+username =. 'username' getfield body
+password =. 'password' getfield body
+```
+
+**Critical gotchas from JHSinfo.md that apply here:**
+- Always ravel (`,`) both sides of `-:` when comparing JSON keys — pjson keys are rank-1 vectors, J string literals are rank-0.
+- `return.` ignores its argument; assign to a name first, then `return.`.
+- Negative numbers from `":` produce `_` not `-`; use `rplc '_';'-'` before putting any numeric value in a JSON string.
+- Boxed strings padded to equal length — always `dltb > idx { boxedList` before using string values.
+- `htmlresponse` closes the socket; every code path must call it exactly once.
 
 ---
 
@@ -198,11 +336,11 @@ Install all of these via the J Package Manager before first run:
 ## 6. Implementation Phases
 
 ### Phase 1 — Core Infrastructure
-1. `src/init.ijs` — addon loading, jlearn path setup, JHS start on port 65001
+1. `src/init.ijs` — addon loading, jlearn path setup, `config` verb in `jhs` locale, `app_serve` with manual `getdata` loop (not `jfe 1`), `dispatch` verb, shared `japi_ok`/`japi_err`/`japi_404` helpers
 2. `src/db.ijs` — in-memory store, file-backed persistence
-3. `src/auth.ijs` — register/login, SHA-256+salt hashing, stateless token
+3. `src/auth.ijs` — register/login, SHA-256+salt hashing, stateless token, `validateToken`
 4. `src/routes/api_health.ijs` — `GET /api/health` returns `{"status":"ok"}`
-5. `src/routes/api_auth.ijs` — `POST /api/register`, `POST /api/login`
+5. `src/routes/api_auth.ijs` — raw POST handlers, `dec_pjson_ NV_jhs_` for body, `getfield` helper
 6. `src/www/index.html` + `app.js` — SPA shell with login/register pages
 
 ### Phase 2 — CSV Upload and Quality Report
@@ -357,7 +495,30 @@ data/
 
 ---
 
-## 10. Key Design Decisions and Rationale
+## 10. J / JHS Gotchas (from JHSinfo.md — must read before coding)
+
+These are confirmed issues from a previous JHS project. Each one will burn you if ignored.
+
+| Area | Gotcha | Fix |
+|---|---|---|
+| Evaluation order | No operator precedence — right-to-left always. String concatenation needs explicit parens. | `'http://' , LOCALHOST , ':' , (": PORT) , '/api'` |
+| `-:` match | Compares shape AND content. JSON keys from `dec_pjson_` are rank-1; J string literals are rank-0. They won't match. | Ravel both sides: `(,x) -: (,k)` |
+| `return.` | Its argument is **ignored**. The verb returns the last evaluated expression. | Assign to `r`, then call `return.` alone on next line. |
+| Loop return value | A `while.` loop's last expression is the test predicate, not the body result. | End every verb with an explicit `r` line. |
+| `try./catch.` | Cannot assign result on the same line as `try.`. | Assign default before the block; assign inside each branch. |
+| Negative literals | `":` formats negative numbers with `_` not `-`. Breaks JSON. | `(": n) rplc '_';'-'` before putting numbers in JSON strings. |
+| Boxed string padding | Strings in a boxed list are padded with trailing spaces to equal length. | Always `dltb > idx { list` before using string values. |
+| `;` (Link) | Does not always produce a 2-element boxed list — appends rows when right arg is a 2D boxed matrix. | Use `(<x) , <y` for an explicit 2-element boxed list. |
+| `jfe 1` | Is a no-op under `jconsole -js`. Server exits immediately after binding. | Use manual `while. 1 do. getdata'' ... end.` loop. |
+| Locale visibility | Handler verbs run in their own locale (copath = z only). Cannot see `jhs` names without `_jhs_` suffix. | Use `coinsert 'jhs'` in handler coclass, **or** always qualify with `_jhs_`. |
+| `htmlresponse` | Closes the socket. Calling it twice per request errors. | Every code path must reach exactly one `htmlresponse` call. |
+| `OKURL` init | `addOKURL` calls `rmOKURL` internally which does `OKURL -. <y`. Crashes if `OKURL` is `''`. | `OKURL =: 0$<''` before the first `addOKURL` call. |
+| `gethv` key format | Must include the trailing colon. | `gethv_jhs_ 'Authorization:'` |
+| Control flow scope | `if.`, `while.`, `select.` are only valid inside a verb body — not at script top level. | Wrap any top-level logic in a named verb and call it. |
+
+---
+
+## 11. Key Design Decisions and Rationale
 
 | Decision | Rationale |
 |---|---|
