@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Browser temp files (Brave, Chrome, etc.)
+docs/.com.brave.Browser.*
+docs/.com.google.Chrome.*
+docs/.com.microsoft.Edge.*
+
+# Obsidian vault metadata
+docs/.obsidian/workspace.json
+docs/.obsidian/workspace-mobile.json
+
+# J session state
+*.ijx
+*.ijs.bak
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
