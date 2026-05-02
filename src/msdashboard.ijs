@@ -6,6 +6,13 @@ NB.   - Dataset list (fetched on page load)
 NB.   - CSV upload via textarea (paste CSV text + give it a name)
 NB.   - Quality report panel (shown after upload or on row click)
 NB.   - Delete dataset
+NB.
+NB. Phase 3 features:
+NB.   - PCA run form (n_components, preprocessing options)
+NB.   - Scree plot (Plotly)
+NB.   - 2-D scatter of PC1 vs PC2 (Plotly)
+NB.   - Loadings heatmap (Plotly)
+NB.   - Previous PCA runs list per dataset
 
 coclass 'msdashboard'
 coinsert 'jhs'
@@ -18,7 +25,19 @@ jhh1 'ModelScope'
 '<span id="ms-whoami" class="ms-whoami"></span>'
 'logout' jhb 'Sign out'
 '</header>'
+
+NB. ── Tab bar ─────────────────────────────────────────────────────────────
+'<nav class="ms-tabs">'
+'<button class="ms-tab ms-tab-active" onclick="switchTab(''tab-data'')">Datasets</button>'
+'<button class="ms-tab" onclick="switchTab(''tab-pca'')">PCA</button>'
+'</nav>'
+
 '<main class="ms-main">'
+
+NB. ════════════════════════════════════════════════════════════════════════
+NB. TAB 1 — Datasets
+NB. ════════════════════════════════════════════════════════════════════════
+'<div id="tab-data" class="ms-tab-panel">'
 '<div class="ms-columns">'
 
 NB. ── Left panel: upload + dataset list ─────────────────────────────────────
@@ -63,15 +82,92 @@ NB. ── Right panel: quality report ─────────────�
 '</section>'
 
 '</div>'
+'</div>'
+
+NB. ════════════════════════════════════════════════════════════════════════
+NB. TAB 2 — PCA
+NB. ════════════════════════════════════════════════════════════════════════
+'<div id="tab-pca" class="ms-tab-panel" style="display:none">'
+'<div class="ms-columns">'
+
+NB. ── Left panel: PCA run form + run history ──────────────────────────────
+'<section class="ms-panel ms-left">'
+'<h2>Run PCA</h2>'
+'<div class="ms-pca-form">'
+'<label>Dataset</label>'
+'<select id="pca-dsid" class="ms-select">'
+'<option value="">— select a dataset —</option>'
+'</select>'
+'<label style="margin-top:8px">Components <span class="ms-hint-inline">(2–N)</span></label>'
+'pca_ncomp' jhtext '2';4
+'<label style="margin-top:8px">Preprocessing</label>'
+'<div class="ms-checkgroup">'
+'<label><input type="checkbox" id="pp-drop-const" checked> Drop constant columns</label>'
+'<label><input type="checkbox" id="pp-scale-std"  checked> Z-score standardise</label>'
+'<label><input type="checkbox" id="pp-scale-mm"> Min-max normalise</label>'
+'</div>'
+'<div class="ms-upload-actions" style="margin-top:12px">'
+'runpca' jhb 'Run PCA'
+'<span id="pca-msg" class="ms-msg"></span>'
+'</div>'
+'</div>'
+
+'<h2 style="margin-top:24px">Previous Runs</h2>'
+'<div id="pca-runs-wrap">'
+'<p id="pca-runs-empty" class="ms-hint">No runs yet for this dataset.</p>'
+'<table id="pca-runs-table" class="ms-table" style="display:none">'
+'<thead><tr><th>#Comp</th><th>Samples</th><th>Date</th><th></th></tr></thead>'
+'<tbody id="pca-runs-tbody"></tbody>'
+'</table>'
+'</div>'
+'</section>'
+
+NB. ── Right panel: plots ──────────────────────────────────────────────────
+'<section class="ms-panel ms-right">'
+'<h2>Results <span id="pca-run-label" class="ms-subtitle"></span></h2>'
+'<p id="pca-hint" class="ms-hint">Run PCA or load a previous run to see plots.</p>'
+'<div id="pca-results" style="display:none">'
+
+NB. Preprocessing report banner
+'<div id="pca-preproc-bar" class="ms-preproc-bar"></div>'
+
+NB. Explained variance badges
+'<div id="pca-ev-summary" class="ms-qr-summary" style="margin-bottom:16px"></div>'
+
+NB. Scree plot
+'<div class="ms-plot-title">Scree Plot (all components)</div>'
+'<div id="plot-scree" class="ms-plot"></div>'
+
+NB. Scatter
+'<div class="ms-plot-title">PC1 vs PC2 Scatter</div>'
+'<div id="plot-scatter" class="ms-plot"></div>'
+
+NB. Loadings heatmap
+'<div class="ms-plot-title">Loadings (PC rows × feature columns)</div>'
+'<div id="plot-loadings" class="ms-plot" style="min-height:200px"></div>'
+
+'</div>'
+'</section>'
+
+'</div>'
+'</div>'
+
 '</main>'
-NB. Hidden fields for delete and quality-view dataset ids
+
+NB. Hidden fields
 '<input type="hidden" id="dsid-del"  name="dsid-del"  value="">'
 '<input type="hidden" id="dsid-view" name="dsid-view" value="">'
-NB. Hidden refresh button — triggered by ev_body_load to populate dataset list
+'<input type="hidden" id="pca-run-id" name="pca-run-id" value="">'
+'<input type="hidden" id="pca-ds-id"  name="pca-ds-id"  value="">'
+
+NB. Hidden refresh button triggered on body load
 '<span style="display:none">'
 'listds' jhb 'Refresh'
 '</span>'
 '</div>'
+
+NB. Plotly CDN
+'<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>'
 )
 
 NB. ── Styles ──────────────────────────────────────────────────────────────────
@@ -91,7 +187,16 @@ button.ms-del { padding:3px 10px; border-radius:4px; cursor:pointer;
 button.ms-del:hover { background:#c0392b; }
 button.ms-view { padding:3px 10px; border-radius:4px; cursor:pointer;
                  background:#2980b9; color:#fff; border:none; font-size:0.8rem; }
-button.ms-view:hover { background:#1a6fa8; }
+button.ms-view:hover  { background:#1a6fa8; }
+button.ms-load-run    { padding:3px 10px; border-radius:4px; cursor:pointer;
+                        background:#8e44ad; color:#fff; border:none; font-size:0.8rem; }
+button.ms-load-run:hover { background:#6c3483; }
+.ms-tabs { display:flex; gap:0; background:#1a252f; padding:0 24px; }
+.ms-tab  { padding:10px 22px; border:none; background:none; color:#bdc3c7;
+           font-size:0.95rem; cursor:pointer; border-bottom:3px solid transparent; }
+.ms-tab:hover      { color:#fff; }
+.ms-tab-active     { color:#fff; border-bottom-color:#3498db; }
+.ms-tab-panel      { width:100%; }
 .ms-main { flex:1; overflow:auto; padding:24px; }
 .ms-columns { display:flex; gap:24px; align-items:flex-start; }
 .ms-panel { background:#fff; border-radius:8px; padding:24px;
@@ -112,6 +217,7 @@ textarea#csvdata { width:100%; padding:6px 8px; border:1px solid #ccc;
 .ms-msg.ok  { color:#27ae60; }
 .ms-msg.err { color:#e74c3c; }
 .ms-hint { color:#999; font-size:0.9rem; }
+.ms-hint-inline { color:#999; font-size:0.8rem; font-weight:normal; }
 .ms-table { width:100%; border-collapse:collapse; font-size:0.88rem; }
 .ms-table th { text-align:left; padding:6px 10px; background:#f8f9fa;
                border-bottom:2px solid #dee2e6; color:#555; }
@@ -124,10 +230,36 @@ textarea#csvdata { width:100%; padding:6px 8px; border:1px solid #ccc;
 .ms-badge-blue { background:#d6eaf8; color:#1a5276; }
 .ms-badge-green { background:#d5f5e3; color:#1d6a39; }
 .ms-badge-warn { background:#fdebd0; color:#784212; }
+.ms-pca-form { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }
+.ms-pca-form label { font-size:0.85rem; font-weight:600; color:#555; }
+.ms-pca-form input[type=text] { width:80px; padding:6px 8px;
+  border:1px solid #ccc; border-radius:4px; font-size:0.9rem; }
+.ms-select { width:100%; padding:6px 8px; border:1px solid #ccc;
+  border-radius:4px; font-size:0.9rem; background:#fff; }
+.ms-checkgroup { display:flex; flex-direction:column; gap:4px; padding:4px 0; }
+.ms-checkgroup label { font-weight:normal; font-size:0.88rem; color:#444;
+  cursor:pointer; display:flex; align-items:center; gap:6px; }
+.ms-preproc-bar { font-size:0.82rem; color:#555; background:#f8f9fa;
+  border:1px solid #e0e0e0; border-radius:4px; padding:6px 10px;
+  margin-bottom:12px; }
+.ms-plot-title { font-size:0.88rem; font-weight:600; color:#555;
+  margin:16px 0 4px; }
+.ms-plot { width:100%; height:300px; }
 )
 
 NB. ── Client JavaScript ─────────────────────────────────────────────────────
 JS =: 0 : 0
+// ── Tab switching ─────────────────────────────────────────────────────────
+function switchTab(id) {
+  ['tab-data','tab-pca'].forEach(function(t) {
+    jbyid(t).style.display = t === id ? '' : 'none';
+  });
+  document.querySelectorAll('.ms-tab').forEach(function(btn) {
+    btn.classList.toggle('ms-tab-active', btn.getAttribute('onclick').indexOf("'"+id+"'") !== -1);
+  });
+  if (id === 'tab-pca') refreshPcaDatasetDropdown();
+}
+
 // ── Upload ──────────────────────────────────────────────────────────────────
 function ev_upload_click() {
   var name = jbyid('dsname').value.trim();
@@ -141,7 +273,7 @@ function ev_upload_click_ajax(ts) {
     showMsg('upload-msg','Uploaded!','ok');
     jbyid('dsname').value = '';
     jbyid('csvdata').value = '';
-    refreshDatasets(ts[1]);   // ts[1] is the dataset list JSON
+    refreshDatasets(ts[1]);
   } else {
     showMsg('upload-msg', ts[1], 'err');
   }
@@ -180,11 +312,93 @@ function ev_quality_click_ajax(ts) {
   else jbyid('qr-hint').textContent = ts[1];
 }
 
+// ── Run PCA ──────────────────────────────────────────────────────────────────
+function ev_runpca_click() {
+  var dsid  = jbyid('pca-dsid').value;
+  var ncomp = jbyid('pca_ncomp').value.trim();
+  if (!dsid) { showMsg('pca-msg','Select a dataset first.','err'); return; }
+  if (!ncomp || isNaN(parseInt(ncomp,10))) { showMsg('pca-msg','Enter a valid number of components.','err'); return; }
+  var opts = [];
+  if (jbyid('pp-drop-const').checked) opts.push('drop_const');
+  if (jbyid('pp-scale-std').checked)  opts.push('scale_std');
+  if (jbyid('pp-scale-mm').checked)   opts.push('scale_mm');
+  jbyid('pca-ds-id').value  = dsid;
+  jbyid('pca-run-id').value = '';
+  jform.jmid.value  = 'runpca';
+  jform.jtype.value = 'click';
+  // Pass opts as pipe-delimited string in a hidden field we'll read server-side
+  jform['pca_ncomp'].value = ncomp;
+  // opts passed as pca_opts hidden
+  var optsField = document.getElementById('pca-opts-hidden');
+  if (!optsField) {
+    optsField = document.createElement('input');
+    optsField.type = 'hidden';
+    optsField.name = 'pca_opts';
+    optsField.id   = 'pca-opts-hidden';
+    jform.appendChild(optsField);
+  }
+  optsField.value = opts.join('|');
+  showMsg('pca-msg','Running PCA…','');
+  jdoajax(['pca-ds-id','pca_ncomp','pca-opts-hidden'], '');
+}
+function ev_runpca_click_ajax(ts) {
+  if (ts[0]==='1') {
+    showMsg('pca-msg','Done!','ok');
+    var summary = JSON.parse(ts[1]);
+    renderPcaResults(summary);
+    // refresh runs list for this dataset
+    loadPcaRuns(jbyid('pca-ds-id').value);
+  } else {
+    showMsg('pca-msg', ts[1], 'err');
+  }
+}
+
+// ── Load previous PCA run ────────────────────────────────────────────────────
+function loadPcaRun(runId) {
+  jbyid('pca-run-id').value = runId;
+  jform.jmid.value  = 'loadpcarun';
+  jform.jtype.value = 'click';
+  jdoajax(['pca-run-id'], '');
+}
+function ev_loadpcarun_click_ajax(ts) {
+  if (ts[0]==='1') {
+    var summary = JSON.parse(ts[1]);
+    renderPcaResults(summary);
+    showMsg('pca-msg','','');
+  } else {
+    showMsg('pca-msg', ts[1], 'err');
+  }
+}
+
+// ── Delete PCA run ────────────────────────────────────────────────────────────
+function deletePcaRun(runId) {
+  jbyid('pca-run-id').value = runId;
+  jform.jmid.value  = 'delpcarun';
+  jform.jtype.value = 'click';
+  jdoajax(['pca-run-id'], '');
+}
+function ev_delpcarun_click_ajax(ts) {
+  if (ts[0]==='1') loadPcaRuns(jbyid('pca-ds-id').value);
+  else showMsg('pca-msg', ts[1], 'err');
+}
+
+// ── Load PCA runs list ───────────────────────────────────────────────────────
+function loadPcaRuns(dsid) {
+  if (!dsid) return;
+  jbyid('pca-ds-id').value = dsid;
+  jform.jmid.value  = 'listpcaruns';
+  jform.jtype.value = 'click';
+  jdoajax(['pca-ds-id'], '');
+}
+function ev_listpcaruns_click_ajax(ts) {
+  renderPcaRunsList(JSON.parse(ts[0]));
+}
+
 // ── Render helpers ───────────────────────────────────────────────────────────
 function showMsg(id, msg, cls) {
   var el = jbyid(id);
   el.textContent = msg;
-  el.className = 'ms-msg ' + cls;
+  el.className = 'ms-msg' + (cls ? ' ' + cls : '');
 }
 
 function refreshDatasets(json) {
@@ -238,9 +452,142 @@ function renderQuality(name, json) {
   jbyid('qr-table').style.display = '';
 }
 
+function refreshPcaDatasetDropdown() {
+  // Re-read the dataset table to populate the PCA dataset selector
+  var rows = jbyid('ds-tbody').querySelectorAll('tr');
+  var sel  = jbyid('pca-dsid');
+  var prev = sel.value;
+  while (sel.options.length > 1) sel.remove(1);
+  var tbl = jbyid('ds-table');
+  if (tbl.style.display === 'none') return;
+  var tbodies = tbl.querySelectorAll('tbody tr');
+  tbodies.forEach(function(tr) {
+    var cells = tr.querySelectorAll('td');
+    if (!cells.length) return;
+    var btn = tr.querySelector('.ms-view');
+    if (!btn) return;
+    var match = btn.getAttribute('onclick').match(/viewQuality\((\d+)/);
+    if (!match) return;
+    var id   = match[1];
+    var name = cells[0].textContent;
+    var opt  = document.createElement('option');
+    opt.value = id;
+    opt.textContent = name;
+    if (id === prev) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+function renderPcaRunsList(runs) {
+  var tbody = jbyid('pca-runs-tbody');
+  tbody.innerHTML = '';
+  if (runs.length === 0) {
+    jbyid('pca-runs-empty').style.display = '';
+    jbyid('pca-runs-table').style.display = 'none';
+    return;
+  }
+  jbyid('pca-runs-empty').style.display = 'none';
+  jbyid('pca-runs-table').style.display = '';
+  runs.forEach(function(r) {
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + r.n_components + '</td>' +
+      '<td>' + r.n_samples + '</td>' +
+      '<td>' + r.ts.substring(0,10) + '</td>' +
+      '<td><div class="ms-actions">' +
+        '<button class="ms-load-run" onclick="loadPcaRun(' + r.id + ')">Load</button>' +
+        '<button class="ms-del"      onclick="deletePcaRun(' + r.id + ')">Del</button>' +
+      '</div></td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function renderPcaResults(s) {
+  jbyid('pca-hint').style.display    = 'none';
+  jbyid('pca-results').style.display = '';
+
+  // Label
+  jbyid('pca-run-label').textContent = '— ' + s.n_components + ' PC(s), ' + s.n_samples + ' samples';
+
+  // Preproc banner
+  var pp = s.preproc_report;
+  jbyid('pca-preproc-bar').textContent = pp ? pp.steps : '';
+
+  // EV badges
+  var evDiv = jbyid('pca-ev-summary');
+  evDiv.innerHTML = '';
+  s.explained_var.forEach(function(v, i) {
+    var sp = document.createElement('span');
+    sp.className = 'ms-badge ms-badge-blue';
+    sp.textContent = 'PC' + (i+1) + ': ' + v.toFixed(1) + '%';
+    evDiv.appendChild(sp);
+  });
+  var total = s.explained_var.reduce(function(a,b){return a+b;},0);
+  var tot = document.createElement('span');
+  tot.className = 'ms-badge';
+  tot.textContent = 'Total: ' + total.toFixed(1) + '%';
+  evDiv.appendChild(tot);
+
+  // Scree plot (all components)
+  var allEv = s.all_ev;
+  var scrLabels = allEv.map(function(_,i){return 'PC'+(i+1);});
+  Plotly.newPlot('plot-scree', [{
+    x: scrLabels, y: allEv, type: 'bar',
+    marker: {color: '#3498db'},
+    name: 'Explained Var %'
+  }], {
+    margin: {t:10,r:10,b:40,l:45},
+    xaxis: {title: 'Component'},
+    yaxis: {title: '% Variance'}
+  }, {responsive: true, displaylogo: false});
+
+  // Scatter PC1 vs PC2
+  if (s.n_components >= 2) {
+    var xs = s.transformed.map(function(r){return r[0];});
+    var ys = s.transformed.map(function(r){return r[1];});
+    Plotly.newPlot('plot-scatter', [{
+      x: xs, y: ys, mode: 'markers',
+      marker: {size:6, color:'#2ecc71', opacity:0.75}
+    }], {
+      margin: {t:10,r:10,b:45,l:50},
+      xaxis: {title:'PC1'},
+      yaxis: {title:'PC2'}
+    }, {responsive: true, displaylogo: false});
+  } else {
+    jbyid('plot-scatter').innerHTML = '<p class="ms-hint" style="padding:8px">Need ≥2 components for scatter.</p>';
+  }
+
+  // Loadings heatmap
+  var colNames = s.col_names;
+  var pcLabels = s.loadings.map(function(_,i){return 'PC'+(i+1);});
+  Plotly.newPlot('plot-loadings', [{
+    z: s.loadings,
+    x: colNames,
+    y: pcLabels,
+    type: 'heatmap',
+    colorscale: 'RdBu',
+    zmid: 0
+  }], {
+    margin: {t:10,r:10,b:70,l:50}
+  }, {responsive: true, displaylogo: false});
+}
+
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// When PCA dataset dropdown changes, load that dataset's run history
+document.addEventListener('DOMContentLoaded', function() {
+  jbyid('pca-dsid').addEventListener('change', function() {
+    var id = this.value;
+    jbyid('pca-ds-id').value = id;
+    if (id) loadPcaRuns(id);
+    else {
+      jbyid('pca-runs-empty').style.display = '';
+      jbyid('pca-runs-table').style.display = 'none';
+    }
+  });
+});
 )
 
 NB. ── Event dispatcher ────────────────────────────────────────────────────────
@@ -268,13 +615,20 @@ jev_get =: jev =: 3 : 0
     ms_delete''
   elseif. 'quality_click' -: mid,'_',type do.
     ms_quality''
+  elseif. 'runpca_click' -: mid,'_',type do.
+    ms_runpca''
+  elseif. 'listpcaruns_click' -: mid,'_',type do.
+    ms_listpcaruns''
+  elseif. 'loadpcarun_click' -: mid,'_',type do.
+    ms_loadpcarun''
+  elseif. 'delpcarun_click' -: mid,'_',type do.
+    ms_delpcarun''
   else.
     jhrajax ''
   end.
 )
 
 NB. ── Dataset list JSON builder ───────────────────────────────────────────────
-NB. Returns a JSON array string from db_listdatasets rows.
 ms_ds_list_json =: 3 : 0
   uid  =. MS_UID_jhs_
   rows =. db_listdatasets_jhs_ uid
@@ -329,7 +683,6 @@ ms_upload =: 3 : 0
     return.
   end.
   NB. type detection and quality report
-  NB. use (<x),<y syntax — ; merges boxed vec + boxed matrix into a matrix
   types  =. csv_detect_types_jhs_ datamat
   qrep   =. csv_quality_report_jhs_ (<header) , (<datamat) , <types
   prev   =. csv_preview_json_jhs_ (<header) , <datamat
@@ -387,4 +740,70 @@ ms_quality =: 3 : 0
   nm   =. dltb > 1 { row
   qrep =. dltb > 8 { row
   jhrajax '1',JASEP,nm,JASEP,qrep
+)
+
+NB. ── Run PCA handler ──────────────────────────────────────────────────────────
+ms_runpca =: 3 : 0
+  r =. ''
+  try.
+  dsid  =. ". dltb getv 'pca-ds-id'
+  ncomp =. ". dltb getv 'pca_ncomp'
+  NB. opts: pipe-delimited string like 'drop_const|scale_std'
+  opts_str =. dltb getv 'pca_opts'
+  NB. split on '|'
+  opts =. i. 0
+  if. 0 < # opts_str do.
+    NB. split pipe-separated list into boxed tokens
+    tok =. ''
+    k   =. 0
+    while. k <: # opts_str do.
+      c =. k { opts_str , '|'
+      if. c = '|' do.
+        if. 0 < # tok do. opts =. opts , < tok end.
+        tok =. ''
+      else.
+        tok =. tok , c
+      end.
+      k =. >: k
+    end.
+  end.
+  result =. pca_run_jhs_ dsid ; ncomp ; opts
+  NB. check for error: result is '0',JASEP,errmsg or a 3-element boxed list
+  if. (2 = 3!:0 result) *. '0' -: {. result do.
+    jhrajax result
+    return.
+  end.
+  summary_json =. dltb > 2 { result
+  jhrajax '1',JASEP,summary_json
+  catch.
+    jhrajax '0',JASEP,'PCA error: ',13!:12''
+  end.
+)
+
+NB. ── List PCA runs handler ────────────────────────────────────────────────────
+ms_listpcaruns =: 3 : 0
+  dsid =. ". dltb getv 'pca-ds-id'
+  jhrajax pca_listjson_jhs_ dsid
+)
+
+NB. ── Load PCA run handler ─────────────────────────────────────────────────────
+ms_loadpcarun =: 3 : 0
+  rid =. ". dltb getv 'pca-run-id'
+  json =. pca_getjson_jhs_ rid
+  if. 0 = # json do.
+    jhrajax '0',JASEP,'Run not found.'
+    return.
+  end.
+  jhrajax '1',JASEP,json
+)
+
+NB. ── Delete PCA run handler ───────────────────────────────────────────────────
+ms_delpcarun =: 3 : 0
+  rid =. ". dltb getv 'pca-run-id'
+  ok =. db_deletepcarun_jhs_ rid
+  if. ok do.
+    jhrajax '1'
+  else.
+    jhrajax '0',JASEP,'Delete failed.'
+  end.
 )
