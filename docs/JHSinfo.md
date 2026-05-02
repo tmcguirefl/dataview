@@ -1,7 +1,7 @@
-# JHSinfo — Lessons Learned: J Language and JHS Platform
+# JHSinfo — J Language and JHS Platform Reference
 
-Practical issues encountered building an MCP server in pure J using JHS (J HTTP Server)
-as the HTTP frontend. Organized by category.
+Practical knowledge accumulated building ModelScope-J on JHS (J HTTP Server).
+Organized by category. Corrections from earlier wrong assumptions are noted explicitly.
 
 ---
 
@@ -36,7 +36,7 @@ k  =. , > 0 { row
 k -: nx           NB. 1
 ```
 
-### `;` (Link) appends rows into matching-rank arrays — it does not always box
+### `;` (Link) appends rows — it does not always box
 
 `;` boxes its arguments **only when they are rank-0 scalars or rank-1 vectors** and
 the ranks are compatible for boxing. When the right argument is a 2D boxed matrix,
@@ -66,9 +66,8 @@ if. k -: nx do.
 end.
 ```
 
-Equally: a `while.` loop's last evaluated expression is the test predicate (or last
-body statement), not any accumulated result. Always end a verb with an explicit
-`r` line to guarantee the intended return value.
+A `while.` loop's last evaluated expression is the test predicate (or last body
+statement), not any accumulated result. Always end a verb with an explicit `r` line.
 
 ```j
 mcp_getfield =: 4 : 0
@@ -92,7 +91,7 @@ spelling or syntax error.
 NB. WRONG at script top level
 while. 1 do. ... end.
 
-NB. CORRECT — wrap in a verb
+NB. CORRECT — wrap in a verb, call the verb
 serve =: 3 : 0
   while. 1 do. ... end.
 )
@@ -100,8 +99,6 @@ serve ''
 ```
 
 ### `try./catch.` blocks cannot be assigned directly
-
-The result of a `try./catch.` block cannot be captured with `=.` on the same line.
 
 ```j
 NB. WRONG
@@ -118,311 +115,28 @@ end.
 
 ### Negative number literals use `_`, not `-`
 
-J uses `_` as the negative sign in numeric literals (`_32601`). This is **not**
-valid JSON. When formatting error codes for JSON output, replace:
+J uses `_` as the negative sign in numeric literals (`_1`, `_32601`). When
+formatting numbers for JSON or other external uses, replace:
 
 ```j
-jsoncode =. (": errcode) rplc '_';'-'
+jsonval =. (": number) rplc '_';'-'
 ```
 
 ### Boxed strings in a boxed list are padded to equal length
 
-When multiple strings are stored in a boxed list (e.g. a registry entry
-`name ; description ; schema`), J pads all character atoms in the list to
-the same length with trailing spaces. Use `dltb` (delete leading/trailing
-blanks) before using the value.
+J pads all character atoms in a boxed list to the same length with trailing spaces.
+Always use `dltb` (delete leading/trailing blanks) when extracting strings.
 
 ```j
 nm   =. dltb > 0 { entry
 desc =. dltb > 1 { entry
 ```
 
----
-
-## General JHS Application Startup Pattern
-
-Every headless JHS web application follows the same structure. The MCP server
-(`config_jhs_mcp.ijs`) is the canonical example. Copy this pattern for any new
-JHS application.
-
-### Config file structure
-
-```j
-coclass 'jhs'
-
-NB. Application-specific settings
-MY_PORT =: 65002
-
-NB. config verb — called by jhscfg after configdefault sets defaults.
-NB. Do NOT pre-assign PORT here; jhscfg only calls configdefault (which sets
-NB. PASS, USER, AUTO, etc.) when PORT is undefined, so let jhscfg call it first.
-config =: 3 : 0
-  AUTO =: 0          NB. suppress browser launch
-  PORT =: MY_PORT
-)
-
-NB. Load JHS core — defines jhscfg, getdata, addOKURL, dobind, htmlresponse, etc.
-load '~addons/ide/jhs/core.ijs'
-
-NB. Load your handler file(s) here
-load '~/path/to/myhandler.ijs'
-
-NB. Start the server
-app_serve =: 3 : 0
-  OKURL =: 0$<''        NB. must be boxed list before addOKURL
-  jhscfg''              NB. runs configdefault, then calls config verb above
-  logappfile =: <jpath '~user/myapp.log'
-  IFJHS_z_ =: 1
-  LOCALHOST =: '0.0.0.0'
-  cookie =: 'jcookie=' , ": 6!:0''
-  SKSERVER_jhs_ =: _1
-  r =. dobind''
-  if. 0 ~: r do. echo 'bind failed' [ exit'' end.
-  sdcheck_jsocket_ sdlisten_jsocket_ SKLISTEN , 5
-  addOKURL 'myurl'      NB. exempts /myurl from login redirect
-  echo 'listening on http://' , LOCALHOST , ':' , (": PORT) , '/myurl'
-  while. 1 do.
-    try.
-      getdata''
-      if. (1=RAW) *. 'myurl' -: URL do.
-        jev_post_raw_myurl_ ''   NB. raw POST handler
-      end.
-    catch. end.
-  end.
-)
-
-app_serve''
-```
-
-Start with:
-
-```sh
-jconsole -js "load '~/path/to/config_myapp.ijs'" > /tmp/myapp.log 2>&1 &
-```
-
-### URL dispatch — how JHS routes requests
-
-JHS's `input` verb (in `core.ijs`) routes each request to a handler verb whose
-name encodes both the method and the URL:
-
-| Request type | Handler verb called | Notes |
-|---|---|---|
-| Raw POST to `/foo` | `jev_post_raw_foo_` | RAW=1; body in `NV_jhs_` |
-| Form POST to `/foo` | reads `jdo` field | standard JHS form flow |
-| GET `/foo` | `jev_get_foo_` | normal page handler |
-| GET with `.` in URL | `jev_get_jfilesrc_` | file serving |
-
-RAW=1 is set by `getdata` when the POST body is not form-encoded (e.g.
-`Content-Type: application/json`). The MCP server uses raw POST exclusively.
-
-For the headless loop we drive `getdata''` directly and dispatch ourselves,
-which means only the `RAW` branch is wired up. If you need GET support in a
-headless app, add a parallel `elseif. 'GET' -: METHOD` branch.
-
-### Handler verb structure
-
-Define handler verbs in their own coclass with `coinsert 'jhs'` so they can
-call `htmlresponse`, `gethv`, `NV`, etc. without explicit `_jhs_` suffixes
-inside the handler body:
-
-```j
-NB. myhandler.ijs
-coclass 'myurl'
-coinsert 'jhs'
-
-NB. Called for raw POST /myurl
-jev_post_raw =: 3 : 0
-  body =. dec_pjson_ NV_jhs_    NB. NV_jhs_: raw POST body bytes
-  NB. ... process body ...
-  resp =. 'HTTP/1.1 200 OK' , CRLF , 'Content-Type: application/json' , CRLF , CRLF , '{}'
-  htmlresponse_jhs_ resp         NB. send response and close connection
-)
-
-NB. Called for GET /myurl
-jev_get =: 3 : 0
-  htmlresponse_jhs_ 'HTTP/1.1 200 OK' , CRLF , CRLF , '<html>...'
-)
-```
-
-JHS calls `jev_post_raw_myurl_` because it looks up the verb name by combining
-`jev_post_raw_` with the URL (`myurl`) and locale suffix (`_`). The `coinsert 'jhs'`
-in the handler locale makes `jev_post_raw` visible as `jev_post_raw_myurl_` via
-the locale chain.
-
-### Available verbs after loading `core.ijs` (in `jhs` locale)
-
-| Verb | Purpose |
-|---|---|
-| `jhscfg''` | Apply config: runs `configdefault`, calls `config` verb, validates |
-| `dobind''` | Create and bind `SKLISTEN` socket on `PORT`; returns 0 on success |
-| `getdata''` | Block until a connection arrives; sets `RAW`, `URL`, `METHOD`, `NV`, `PEER` |
-| `htmlresponse y` | Send raw HTTP response string `y` and close the socket |
-| `addOKURL y` | Exempt URL `y` from login redirect (must call after `jhscfg`) |
-| `gethv y` | Read request header value for key `y` (include trailing colon) |
-| `enc_pjson_ y` | Encode J value `y` to JSON string |
-| `dec_pjson_ y` | Decode JSON string `y` to J value |
-
----
-
-## JHS Platform Gotchas
-
-### JHS creates a new locale for each URL handler at runtime
-
-When JHS receives `POST /mcp`, it auto-creates a locale named `mcp` with a copath
-of `z` only. Any handler verb executing in that locale **cannot see names defined in
-the `jhs` locale** unless they are referenced with the explicit `_jhs_` suffix.
-
-This applies to every global, helper verb, and constant defined in `jhs`:
-
-```j
-NB. Inside jev_post_raw_mcp_ — runs in 'mcp' locale, copath=z only:
-NV_jhs_             NB. POST body (NV alone is undefined here)
-htmlresponse_jhs_   NB. send HTTP response
-MCP_CRLF_jhs_       NB. CRLF constant
-MCP_SESSIONS_jhs_   NB. session store global
-mcp_getfield_jhs_   NB. any helper verb defined in jhs
-```
-
-### Handler verb names ending in `_` cannot take an extra locale suffix
-
-JHS calls `jev_post_raw_mcp_` by convention. A name ending in `_` already carries
-locale-suffix syntax, so appending `__jhs_` produces an ill-formed name.
-
-The solution is to define the handler with `coinsert 'jhs'` in its coclass. This
-makes `jev_post_raw` visible as `jev_post_raw_mcp_` via the locale chain, and the
-serve loop (running in `jhs`) can call it directly by its full name:
-
-```j
-NB. In mcp_handler.ijs:
-coclass 'mcp'
-coinsert 'jhs'   NB. gives mcp locale access to jhs verbs; also makes
-                 NB. jev_post_raw visible as jev_post_raw_mcp_ to callers in jhs
-jev_post_raw =: 3 : 0
-  ...
-)
-
-NB. In the serve loop (running in jhs locale) — direct call works:
-jev_post_raw_mcp_ ''
-```
-
-### `jfe 1` (JHS event loop) is a no-op in `jconsole` script mode
-
-`init ''` calls `jfe 1` as its blocking loop, but `jfe` is a no-op when running
-under `jconsole -js`. The server binds the socket and then exits immediately.
-
-The fix is to drive the request loop manually with `getdata''`:
-
-```j
-mcp_serve =: 3 : 0
-  OKURL =: 0$<''
-  jhscfg''              NB. runs configdefault then config verb (sets AUTO=0, PORT)
-  logappfile =: <jpath '~user/jmcp.log'
-  IFJHS_z_ =: 1
-  LOCALHOST =: '0.0.0.0'
-  cookie =: 'jcookie=' , ": 6!:0''
-  SKSERVER_jhs_ =: _1
-  r =. dobind''
-  if. 0 ~: r do. echo 'bind failed' [ exit'' end.
-  sdcheck_jsocket_ sdlisten_jsocket_ SKLISTEN , 5
-  addOKURL 'mcp'
-  while. 1 do.
-    try.
-      getdata''          NB. blocks until a connection arrives
-      if. (1=RAW) *. 'mcp' -: URL do.
-        jev_post_raw_mcp_ ''   NB. called from jhs locale; mcp locale accessible via coinsert
-      end.
-    catch. end.
-  end.
-)
-mcp_serve''
-```
-
-### `config` verb must be defined before calling `jhscfg`
-
-`jhscfg` calls `configdefault` (which sets `AUTO =: 1`, `PORT =: 65001`, etc.)
-and then calls `config` as an override hook. Define `config` in the `jhs` locale
-before starting the server:
-
-```j
-coclass 'jhs'
-config =: 3 : 0
-  AUTO =: 0        NB. suppress browser launch
-  PORT =: 65001
-)
-```
-
-### `OKURL` must be initialized as a boxed list before calling `addOKURL`
-
-`addOKURL` calls `rmOKURL` internally, which does `OKURL -. <y`. If `OKURL`
-is `''` (the JHS default, a character atom), this produces a domain error.
-Pre-initialize it as an empty boxed list:
-
-```j
-OKURL =: 0$<''
-addOKURL 'mcp'
-```
-
-### `htmlresponse` closes the socket — never call it twice per request
-
-Each call to `htmlresponse` sends the full HTTP response and closes the connection.
-Calling it a second time for the same request causes an error. All code paths for
-a given request must converge on exactly one `htmlresponse` call.
-
-### `gethv` reads request headers — key must include the trailing colon
-
-```j
-sid =. gethv_jhs_ 'Mcp-Session-Id:'   NB. colon required
-```
-
----
-
-## `dec_pjson_` Object Structure
-
-`dec_pjson_` decodes a JSON object into an **n×2 boxed matrix** where:
-- Column 0: boxed **rank-1 character vector** (the key)
-- Column 1: boxed decoded value (number → J float, string → rank-1 char, nested object → n×2 matrix)
-
-```j
-dec_pjson_ '{"a":3,"b":5}'
-NB. shape: 2 2  (2 rows, 2 cols)
-NB. 0 { result  →  row 0:  (<,'a') , (<3)
-NB. 1 { result  →  row 1:  (<,'b') , (<5)
-```
-
-Nested objects are decoded recursively. `dec_pjson_` does **not** return lazy/string values
-for nested objects — the entire tree is decoded in one call.
-
-Key lookup pattern (correct):
-
-```j
-mcp_getfield =: 4 : 0
-  r =. ''
-  i =. 0
-  nx =. , x          NB. ravel: match rank-1 keys
-  while. i < # y do.
-    row =. i { y
-    k =. , > 0 { row
-    if. k -: nx do.
-      r =. > 1 { row
-      return.
-    end.
-    i =. >: i
-  end.
-  r
-)
-```
-
----
-
-## Gotchas discovered during ModelScope-J Phase 1 (2026-05)
-
 ### `select./case.` string matching hangs in J9.8
 
-String comparisons inside `select./case.` silently hang the server in J9.8. This affects any
-`case. 'literal'` pattern — the code reaches the `select.` line and then the request never
-completes.
-
-**Always use `if./elseif.` chains for string routing:**
+String comparisons inside `select./case.` silently hang in J9.8. The code reaches
+the `select.` line and the process never completes. **Always use `if./elseif.`** for
+any string-based dispatch.
 
 ```j
 NB. WRONG — hangs in J9.8
@@ -442,48 +156,369 @@ else.
 end.
 ```
 
-This applies everywhere: content-type dispatch, route dispatch, method dispatch.
-
 ### `r =. x [ return.` anti-pattern
 
-The `[` conjunction evaluates **both** sides. Writing `r =. '' [ return.` fires `return.` but
-also evaluates `r =. ''` — in practice the function does not exit cleanly and may produce
-undefined behavior.
+The `[` conjunction evaluates **both** sides. `r =. '' [ return.` fires `return.`
+but the function does not exit cleanly.
 
-**Pattern to avoid:**
 ```j
-if. 0 = nrows do. r =. '' [ return. end.   NB. WRONG
-```
+NB. WRONG
+if. 0 = nrows do. r =. '' [ return. end.
 
-**Correct — separate lines:**
-```j
+NB. CORRECT
 if. 0 = nrows do.
   r =. ''
   return.
 end.
 ```
 
-### `ddfet` — materialize row count before testing
+---
 
-`ddfet` returns a boxed rank-2 array. Testing `# rows` inside an `if.` condition can trigger
-lazy evaluation and hang. Always assign to a variable first:
+## JHS Architecture — How It Works
+
+**JHS is a servlet-style server, not a static file server.** Each URL maps to a J
+locale whose verbs render HTML, handle events, and send responses. There are no
+static files; all output is generated by J code.
+
+### The two-file startup pattern
+
+Every JHS app needs exactly two things:
+
+1. A **`.cfg` file** that defines `config_jhs_` and loads your app, then ends with
+   two fixed lines.
+2. One or more **page locale files** (`.ijs`) that define the page content.
+
+**`jhs.cfg` structure:**
 
 ```j
-rows =. ddfet sh , _1
-nrows =. # rows          NB. materialize before if.
-if. 0 = nrows do.
-  r =. ''
-  return.
-end.
-r =. {. rows
+NB. jhs.cfg — load with: jconsole -js "load '~/myapp/jhs.cfg'"
+
+config_jhs_ =: 3 : 0
+PORT =: 65002          NB. port number (49152-65535)
+AUTO =: 0              NB. 0: don't launch browser automatically
+USER =: ''             NB. no JHS password (app handles its own auth)
+PASS =: ''
+TIPX =: 'MyApp/'       NB. browser tab title prefix
+
+NB. Open database or run other startup tasks here
+load '~/myapp/src/db.ijs'
+db_open_jhs_ ''
+
+NB. Load page locale files
+load '~/myapp/src/mypage.ijs'
+
+NB. Do not edit past this line
+)
+load '~addons/ide/jhs/core.ijs'
+init_jhs_ ''
 ```
 
-### `ddparm` vs `ddsql` + `sql_esc`
+**Start the server:**
 
-`ddparm` requires a complex three-argument format (sql ; integer-type-vector ; boxed-column-vectors)
-and is easy to get wrong — it silently returns `_1` even with a structurally correct call.
+```sh
+jconsole -js "load '~/myapp/jhs.cfg'" > /tmp/myapp.log 2>&1 &
+# then browse to http://localhost:65002/mypage
+```
 
-For simple cases, use `ddsql` with a manual `sql_esc` helper that doubles embedded single-quotes:
+`init_jhs_` is the `init` verb in the `jhs` locale. It calls `jhscfg''` (which runs
+`config_jhs_`), binds the socket, and calls `jfe 1` to start the event loop. Unlike
+`jconsole -js` script mode (where `jfe` is a no-op), the standard `.cfg` / `init_jhs_`
+pattern works correctly because `core.ijs` sets up `input_jfe_` and `output_jfe_`
+before calling `jfe`.
+
+### Page locale structure
+
+Each page is a J script that defines **one locale** with three special nouns and event
+verbs. The locale name matches the URL path segment.
+
+```j
+NB. src/mypage.ijs — accessible at http://localhost:65002/mypage
+
+coclass 'mypage'
+coinsert 'jhs'      NB. gives this locale access to all jhs helpers
+
+NB. ── Body template ─────────────────────────────────────────────────────────
+NB. HBS is a LF-delimited list of J sentences. jhbs'' evaluates each sentence
+NB. and concatenates the returned HTML strings to build the <body>.
+HBS =: 0 : 0
+jhh1 'My Page Title'
+'myfield' jhtext '';20
+'submit'  jhb 'Go'
+)
+
+NB. ── Styles ─────────────────────────────────────────────────────────────────
+CSS =: 0 : 0
+body { font-family: sans-serif; }
+)
+
+NB. ── Client-side JavaScript ──────────────────────────────────────────────────
+NB. JHS inlines this into a <script> tag. Use ev_* naming conventions.
+JS =: 0 : 0
+function ev_submit_click() { jdoajax(['myfield'], ''); }
+function ev_submit_click_ajax(ts) { alert(ts[0]); }
+)
+
+NB. ── Event dispatcher ────────────────────────────────────────────────────────
+NB. JHS calls jev_mypage_ y for EVERY request to /mypage (GET and POST ajax).
+NB. jev_mypage_ resolves to verb 'jev' in locale 'mypage' — define it here.
+NB. Check jmid to distinguish GET page loads from POST ajax events.
+jev_get =: jev =: 3 : 0
+  mid  =. getv 'jmid'
+  type =. getv 'jtype'
+  if. 0 = # mid do.
+    NB. GET — render the full page
+    'My App' jhr ''
+    return.
+  end.
+  NB. POST ajax event — dispatch on mid_type
+  if. 'submit_click' -: mid,'_',type do.
+    jhrajax 'Hello from J!'
+  else.
+    jhrajax ''
+  end.
+)
+```
+
+### How JHS dispatches requests
+
+When a browser hits `/mypage`, JHS's `input` verb (in `core.ijs`) returns the
+sentence `'jev_mypage_ 0'` to `jfe` for evaluation. J parses `jev_mypage_` as
+verb `jev` in locale `mypage`. Since `jev` is not defined in `mypage`, the locale
+search path `mypage → jhs → z` is walked. **Without a local `jev` definition, `jhs`'s
+built-in `jev` dispatcher runs** — which reads `jmid`/`jtype` from `NV` and tries to
+call `ev_<jmid>_<jtype> 0` back in the `jhs` locale, where your page verbs are not
+visible.
+
+**For URL-accessed pages (which is the normal case), you must define `jev` in your
+locale to shadow the `jhs` `jev` and handle both GET and ajax POST yourself.**
+
+```j
+jev_get =: jev =: 3 : 0
+  ...
+)
+```
+
+This makes both `jev_mypage_ y` (from JHS dispatch) and `jev_get` (conventional
+name) point to the same verb.
+
+The full dispatch sequence for a GET:
+
+```
+Browser GET /mypage
+  → core.ijs input: returns 'jev_mypage_ 0'
+  → jfe evaluates: jev_mypage_ 0
+  → J looks up 'jev' in locale 'mypage' → finds our jev =: ...
+  → jev runs: jmid is '', so renders page with 'My App' jhr ''
+  → jhr calls htmlresponse → response sent
+```
+
+The full dispatch sequence for a button-click ajax event:
+
+```
+Browser: user clicks button id='submit'
+  → jevdo() in JS finds ev_submit_click() function → calls it
+  → ev_submit_click() calls jdoajax(['myfield'], '')
+  → jdoajax POSTs to /mypage with jdo='jev_mypage_ 0', jmid='submit', jtype='click'
+  → core.ijs input: POST with jdo → returns 'jev_mypage_ 0'
+  → jfe evaluates: jev_mypage_ 0
+  → jev runs: jmid='submit', type='click' → calls jhrajax 'Hello from J!'
+  → JS receives ajax response → calls ev_submit_click_ajax(['Hello from J!'])
+```
+
+### `jdo` and `jevsentence`
+
+Every JHS page embeds a hidden form field `jlocale` containing the current locale
+name (e.g. `'mypage'`). On page load, the JS framework sets:
+
+```js
+jevsentence = "jev_" + jform.jlocale.value + "_ 0";  // → "jev_mypage_ 0"
+```
+
+`jdoajax` always posts `jdo = jevsentence` unless you pass an explicit sentence as
+the third argument. The `jmid` and `jtype` hidden fields carry the event identity
+(button id, event type), and your `jev` verb reads these from `NV` via `getv`.
+
+### `jhr` — assembling and sending the full page response
+
+`'Title' jhr names;values` assembles the complete HTTP response from the page globals
+`HBS`, `CSS`, `JS` and the standard JHS HTML template, substitutes any `<TAG>` markers
+in the body, calls `htmlresponse`, and closes the connection.
+
+```j
+'ModelScope' jhr ''                    NB. no tag substitutions
+'My App' jhr 'MSG';'Error text'        NB. replaces <MSG> in HBS
+```
+
+The template inserts: `<TITLE>` (prefixed by `TIPX`), `<CSS>` (from your `CSS` noun
+plus JHS base styles), `<JS>` (JHS jscore.js plus your `JS` noun), `<BODY>` (from
+`jhbs HBS`).
+
+### `jhbs` — evaluating the body template
+
+`jhbs HBS` splits `HBS` on `LF`, evaluates each line as a J sentence in the current
+locale, and concatenates the results. Each line must return an HTML string. You can
+use:
+
+- JHS helpers: `jhh1 'text'`, `'id' jhb 'label'`, `'id' jhtext '';20`,
+  `'id' jhpassword '';20`, `jhbr`, `jhhr`, `'id' jhspan ''`, `jhtablea` / `jhtablez` /
+  `jhtr`, `'id' jhdiv ''`
+- Raw HTML strings: `'<div class="foo">'`, `'</div>'`
+- J nouns/verbs that return HTML strings
+
+### Ajax responses — `jhrajax` and `jhrcmds`
+
+**`jhrajax data`** sends a raw JASEP-delimited string back to the browser. The JS
+callback `ev_<mid>_<type>_ajax(ts)` receives `ts` as an array of strings split on
+`JASEP` (ASCII SOH, `1{a.`).
+
+```j
+NB. J side
+jhrajax '1',JASEP,'success message'
+
+NB. JS side
+function ev_submit_click_ajax(ts) {
+  if (ts[0] === '1') { /* success */ }
+  else { jbyid('msg').innerHTML = ts[1]; }
+}
+```
+
+**`jhrcmds cmds`** sends structured commands to the JS framework. Common commands:
+
+```j
+jhrcmds 'set myspan *new text'       NB. set innerHTML of element 'myspan'
+jhrcmds 'set myinput *new value'     NB. set value of input element 'myinput'
+jhrcmds 'pageopen *otherloc'         NB. navigate browser to /otherloc
+jhrcmds 'alert *message text'        NB. browser alert dialog
+```
+
+`jhcmds` (without the `r`) queues commands to run on page load (`ev_body_load`),
+used inside `jev_get` before calling `jhr`:
+
+```j
+jev_get =: jev =: 3 : 0
+  if. 0 = # getv 'jmid' do.
+    jhcmds 'set username *',CURRENT_USER   NB. runs when page loads
+    'My App' jhr ''
+  end.
+)
+```
+
+### JHS form helpers reference
+
+| Helper | Usage | Produces |
+|--------|-------|---------|
+| `jhh1 'text'` | `jhh1 'Title'` | `<h1>` |
+| `'id' jhb 'label'` | `'btn' jhb 'Click me'` | button |
+| `'id' jhtext val;size` | `'name' jhtext '';20` | text input |
+| `'id' jhpassword val;size` | `'pw' jhpassword '';15` | password input |
+| `'id' jhspan val` | `'msg' jhspan ''` | updatable `<span>` |
+| `'id' jhdiv val` | `'out' jhdiv ''` | updatable `<div>` |
+| `jhbr` | `jhbr` | `<br>` |
+| `jhhr` | `jhhr` | `<hr/>` |
+| `jhtablea` | `jhtablea` | `<table>` |
+| `jhtablez` | `jhtablez` | `</table>` |
+| `jhtr row` | `jhtr 'Label:';'id' jhtext '';10` | `<tr><td>...</td></tr>` |
+
+### JHS JS functions reference
+
+| JS function | Purpose |
+|-------------|---------|
+| `jdoajax(ids, data)` | Ajax POST; `ids` = array of form field names to send |
+| `jscdo('btnid')` | Programmatically fire click on element with id `btnid` |
+| `jbyid('id')` | `document.getElementById` shorthand |
+| `jhrajax` (J) | Send ajax response |
+| `jhrcmds` (J) | Send browser commands |
+
+---
+
+## Session State
+
+JHS itself provides a simple single-user session via the `cookie` global (set at
+startup as `jcookie=<timestamp>`). When `PASS` is non-empty, JHS enforces the cookie
+on every request — unauthenticated requests are redirected to `/jlogin`.
+
+For apps with their own user database (multiple users, registration):
+
+- Set `PASS =: ''` in `config_jhs_` so JHS doesn't enforce its own auth.
+- Store the current user in `jhs` locale globals:
+
+```j
+NB. In db.ijs (runs cocurrent 'jhs') — initialise once at load time
+MS_UID  =: _1   NB. _1 = nobody logged in
+MS_USER =: ''
+```
+
+- Read and write them from any page locale using the `_jhs_` suffix:
+
+```j
+MS_UID_jhs_  =: uid    NB. set on login
+MS_USER_jhs_ =: uname
+```
+
+- Guard protected pages at the top of `jev`:
+
+```j
+jev_get =: jev =: 3 : 0
+  mid =. getv 'jmid'
+  if. 0 = # mid do.
+    if. _1 = MS_UID_jhs_ do.
+      jhrcmds 'pageopen *mslogin'
+      return.
+    end.
+    'Dashboard' jhr ''
+  end.
+)
+```
+
+**Note:** This session model is single-server, in-memory, and has no per-browser
+isolation. If two browser tabs log in as different users simultaneously, the second
+login overwrites the globals. For ModelScope-J (single local user) this is acceptable.
+
+---
+
+## SQLite via `data/ddsqlite`
+
+### Setup
+
+```j
+require 'data/ddsqlite'
+setzlocale_jddsqlite_ ''
+
+DB =: _1   NB. connection handle sentinel
+
+db_open =: 3 : 0
+  DB =: ddcon 'database=data/modelscope.db;nocreate=0'
+  if. _1 = DB do. echo 'FATAL: db open failed' [ exit'' end.
+  db_ensure_schema''
+)
+```
+
+Call `db_open_jhs_ ''` from `config_jhs_` in `jhs.cfg` after loading `db.ijs`.
+
+### Queries
+
+```j
+NB. DDL / DML
+rc =. DB ddsql~ 'CREATE TABLE IF NOT EXISTS ...'
+rc =. DB ddsql~ sql    NB. returns 0 on success, _1 on error
+
+NB. SELECT — returns statement handle
+sh =. DB ddsel~ 'SELECT ...'
+if. _1 = sh do. NB. error end.
+
+NB. Fetch all rows — boxed rank-2 array (nrows × ncols)
+rows =. ddfet sh , _1    NB. _1 = fetch all
+nrows =. # rows          NB. MUST materialise before if. — lazy-eval hang otherwise
+if. 0 = nrows do. '' return. end.
+row =. {. rows           NB. first row (boxed vector of ncols elements)
+val =. > 2 { row         NB. column 2 value (unboxed)
+```
+
+### `ddsql` + `sql_esc` — prefer over `ddparm`
+
+`ddparm` has a complex three-argument format and silently returns `_1` even with
+correct structure. For simple literal embedding, use `sql_esc` to double
+single-quote characters:
 
 ```j
 sql_esc =: 3 : 0
@@ -498,50 +533,116 @@ sql_esc =: 3 : 0
   r
 )
 
-sql =. 'INSERT INTO users (username) VALUES (''' , (sql_esc uname) , ''')'
-rc =. DB ddsql~ sql
+sql =. 'INSERT INTO t (name) VALUES (''' , (sql_esc uname) , ''')'
+DB ddsql~ sql
 ```
 
-### SQL `DEFAULT ''` in J strings
+### Avoid `DEFAULT ''` in schema SQL
 
-Embedding `DEFAULT ''` inside a J string literal is error-prone. The quoting:
+Embedding `DEFAULT ''` in a J string requires four single-quotes and is easy to
+get wrong (producing invalid SQL with three quotes). Use nullable columns instead —
+set defaults at the application layer.
 
 ```j
-sql =. sql , ' ,col TEXT DEFAULT '''''
+NB. WRONG — quoting is error-prone
+sql =. sql , ',notes TEXT DEFAULT '''''
+
+NB. CORRECT — nullable, no DEFAULT
+sql =. sql , ',notes TEXT'
 ```
 
-requires four single-quotes to produce two (the SQL `''` empty string), and one extra pair to
-close/reopen the J string — it's easy to produce `DEFAULT '''` (three quotes) which is invalid SQL.
-
-**Simpler fix**: use nullable columns with no DEFAULT for optional text fields. If the application
-needs a default, set it at the application layer instead.
-
-### POST query string is not auto-parsed when RAW=1
-
-When `getdata` sets `RAW=1`, the `QUERY` global is **not** populated — only `NV` (raw body) is set.
-If you POST to `/api?r=register`, the `?r=register` part must be extracted manually from the raw
-request line:
+### Fetch last insert ID
 
 ```j
-reqline =. gethv 'POST'    NB. returns '/api?r=register HTTP/1.1'
-qi =. reqline i. '?'
-qs =. (>: qi) }. reqline
-qs =. (qs i. ' ') {. qs   NB. strip trailing ' HTTP/1.1'
-NB. now parse key=value pairs from qs
+sh =. DB ddsel~ 'SELECT last_insert_rowid()'
+rows =. ddfet sh , _1
+nrows =. # rows
+if. 0 = nrows do. r =. _1 [ return. end.
+r =. > > {. rows
 ```
 
-### `jev_post_raw_api_` stub required for RAW=1
+---
 
-`getdata` sets `RAW=1` only if the verb `jev_post_raw_` concatenated with `URL` and `_` exists
-(checked via `3=nc<'jev_post_raw_',URL,'_'`). J parses `jev_post_raw_api_` as verb name
-`jev_post_raw` in locale `api`.
+## `dec_pjson_` Object Structure
 
-Even if you dispatch POST requests manually from the main loop, the stub verb **must be defined**:
+`dec_pjson_` decodes a JSON object into an **n×2 boxed matrix**:
+- Column 0: boxed **rank-1 character vector** (key)
+- Column 1: boxed decoded value (number → J float, string → rank-1 char, object → n×2 matrix)
 
 ```j
-jev_post_raw_api_ =: 3 : 0
-  api_post_dispatch''   NB. or any body — just needs to exist
+dec_pjson_ '{"a":3,"b":5}'
+NB. shape: 2 2
+NB. row 0: (<,'a') , (<3)
+NB. row 1: (<,'b') , (<5)
+```
+
+Key lookup — ravel both sides before `-:` because pjson keys are rank-1:
+
+```j
+getfield =: 4 : 0
+  r =. ''
+  i =. 0
+  nx =. , x
+  while. i < # y do.
+    row =. i { y
+    k =. , > 0 { row
+    if. k -: nx do.
+      r =. > 1 { row
+      return.
+    end.
+    i =. >: i
+  end.
+  r
 )
 ```
 
-Without this stub, `RAW` stays 0 and `NV` is empty.
+---
+
+## What the Old `init.ijs` / Manual Loop Pattern Was and Why It Was Wrong
+
+An earlier version of ModelScope-J used a manual server startup in `src/init.ijs`:
+
+```j
+NB. OLD PATTERN — do not copy
+coclass 'jhs'
+config =: 3 : 0
+  AUTO =: 0
+  PORT =: 65002
+)
+load '~addons/ide/jhs/core.ijs'
+...
+app_serve =: 3 : 0
+  jhscfg''
+  dobind''
+  while. 1 do.
+    getdata''
+    if. 'OPTIONS' -: toupper METHOD do. ...
+    elseif. (1=RAW) *. 'api' -: URL do. ...
+    ...
+    end.
+  end.
+)
+app_serve''
+```
+
+This was also serving static HTML/JS files from `src/www/` and routing API calls
+manually with `japi_ok` / `japi_err` response helpers.
+
+**Why it was wrong:**
+
+1. **Static file serving is not the JHS model.** JHS renders pages from J locale
+   verbs — there are no static files.
+
+2. **The manual `getdata` loop is only needed for headless non-browser apps** (like
+   an MCP server that speaks JSON over HTTP). Browser-facing JHS apps use
+   `jfe 1` via `init_jhs_''`, which handles the event loop correctly.
+
+3. **The `jhs.cfg` / `init_jhs_''` pattern is simpler.** Two lines at the end of
+   the config file replace all of the manual `dobind`, `sdlisten`, `sdcheck`,
+   `addOKURL`, `jfe` boilerplate.
+
+4. **Routing belongs in locale dispatch, not in a big if/elseif chain.** JHS
+   automatically routes `/mypage` to `jev_mypage_` — no manual `URL` matching needed.
+
+The correct pattern (used by all JHS demo/app files) is the `.cfg` file +
+page locales described above.
