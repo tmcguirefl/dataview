@@ -37,23 +37,31 @@ button.jhb { padding:6px 14px; border-radius:4px; cursor:pointer; }
 )
 
 JS =: 0 : 0
-function ev_logout_click() { jdoajax([],'logout'); }
+function ev_logout_click() { jdoajax([],''); }
 function ev_logout_click_ajax(ts) { location.href='/mslogin'; }
 )
 
-NB. ── Page render ────────────────────────────────────────────────────────────
-jev_get =: 3 : 0
-  if. _1 = MS_UID_jhs_ do.
-    jhrcmds 'pageopen *mslogin'
+NB. ── Event dispatcher ────────────────────────────────────────────────────────
+NB. jev_msdashboard_ resolves to verb 'jev' in locale msdashboard — defined here.
+jev_get =: jev =: 3 : 0
+  mid  =. getv 'jmid'
+  type =. getv 'jtype'
+  if. 0 = # mid do.
+    NB. GET — render page or redirect to login
+    if. _1 = MS_UID_jhs_ do.
+      jhrcmds 'pageopen *mslogin'
+      return.
+    end.
+    jhcmds 'set ms-whoami *Signed in as ',MS_USER_jhs_
+    'ModelScope — Dashboard' jhr ''
     return.
   end.
-  jhcmds 'set ms-whoami *Signed in as ',MS_USER_jhs_
-  'ModelScope — Dashboard' jhr ''
-)
-
-NB. ── Logout handler (ajax) ─────────────────────────────────────────────────
-ev_logout_click =: 3 : 0
-  MS_UID_jhs_  =: _1
-  MS_USER_jhs_ =: ''
-  jhrajax ''
+  NB. Ajax event dispatch
+  if. 'logout_click' -: mid,'_',type do.
+    MS_UID_jhs_  =: _1
+    MS_USER_jhs_ =: ''
+    jhrajax ''
+  else.
+    jhrajax ''
+  end.
 )

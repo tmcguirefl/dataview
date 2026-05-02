@@ -8,11 +8,6 @@ NB.   MS_USER — username string, '' when not logged in
 coclass 'mslogin'
 coinsert 'jhs'
 
-NB. ── Session globals — initialised once at load time ──────────────────────
-NB. These live in the jhs locale so all page locales share them.
-if. _1 = nc <'MS_UID_jhs_'  do. MS_UID_jhs_  =: _1 end.
-if. _1 = nc <'MS_USER_jhs_' do. MS_USER_jhs_ =: '' end.
-
 NB. ── Page body ─────────────────────────────────────────────────────────────
 NB. HBS sentences are evaluated by jhbs; each must return an HTML string.
 NB. jhspan returns a <span> that jhrcmds 'set msg *...' can update in place.
@@ -49,25 +44,43 @@ button.jhb { padding:6px 18px; border-radius:4px; cursor:pointer; }
 JS =: 0 : 0
 function ev_uname_enter() { jscdo('login'); }
 function ev_pass_enter()  { jscdo('login'); }
-function ev_login_click()    { jdoajax(['uname','pass'],'login'); }
-function ev_register_click() { jdoajax(['uname','pass'],'register'); }
+function ev_login_click()    { jdoajax(['uname','pass'],''); }
+function ev_register_click() { jdoajax(['uname','pass'],''); }
 
-function ev_login_click_ajax(ts)    { if(ts[0]) location.href='/msdashboard'; else jbyid('msg').innerHTML=ts[1]; }
-function ev_register_click_ajax(ts) { if(ts[0]) location.href='/msdashboard'; else jbyid('msg').innerHTML=ts[1]; }
+// Both login and register share the same ajax response handler.
+// ts[0] is '1' on success, ts[1] is an error message on failure.
+function ev_login_click_ajax(ts)    { if(ts[0]==='1') location.href='/msdashboard'; else jbyid('msg').innerHTML=ts[1]; }
+function ev_register_click_ajax(ts) { if(ts[0]==='1') location.href='/msdashboard'; else jbyid('msg').innerHTML=ts[1]; }
 )
 
-NB. ── Page render ─────────────────────────────────────────────────────────
-jev_get =: 3 : 0
-  if. _1 ~: MS_UID_jhs_ do.
-    jhrcmds 'pageopen *msdashboard'
+NB. ── Event dispatcher ───────────────────────────────────────────────────────
+NB. JHS calls jev_mslogin_ y for BOTH GET page loads and POST ajax events.
+NB. jev_mslogin_ resolves to verb 'jev' in locale mslogin — defined here.
+NB. For GET (jmid=''), render the page. For POST events, dispatch on jmid+jtype.
+jev_get =: jev =: 3 : 0
+  mid  =. getv 'jmid'
+  type =. getv 'jtype'
+  if. 0 = # mid do.
+    NB. GET — render page (or redirect if already logged in)
+    if. _1 ~: MS_UID_jhs_ do.
+      jhrcmds 'pageopen *msdashboard'
+      return.
+    end.
+    'ModelScope' jhr ''
     return.
   end.
-  'ModelScope' jhr ''
+  NB. Ajax event — dispatch on mid_type
+  if. 'login_click' -: mid,'_',type do.
+    ms_login''
+  elseif. 'register_click' -: mid,'_',type do.
+    ms_register''
+  else.
+    jhrajax ''
+  end.
 )
 
-NB. ── Login handler (ajax) ───────────────────────────────────────────────
-NB. Returns JASEP-delimited: ok(1/0) JASEP message
-ev_login_click =: 3 : 0
+NB. ── Login handler ──────────────────────────────────────────────────────────
+ms_login =: 3 : 0
   uname =. dltb getv 'uname'
   pw    =. dltb getv 'pass'
   if. (0 = # uname) +. (0 = # pw) do.
@@ -91,8 +104,8 @@ ev_login_click =: 3 : 0
   jhrajax '1',JASEP,''
 )
 
-NB. ── Register handler (ajax) ────────────────────────────────────────────
-ev_register_click =: 3 : 0
+NB. ── Register handler ───────────────────────────────────────────────────────
+ms_register =: 3 : 0
   uname =. dltb getv 'uname'
   pw    =. dltb getv 'pass'
   if. 0 = # uname do.

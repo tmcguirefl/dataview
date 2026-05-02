@@ -24,6 +24,10 @@ setzlocale_jddsqlite_ ''
 NB. Global connection handle — set by db_open
 DB =: _1
 
+NB. Session globals — current logged-in user (_1 / '' when anonymous)
+MS_UID  =: _1
+MS_USER =: ''
+
 NB. Path to database file (relative to working directory when server starts)
 DB_PATH =: 'data/modelscope.db'
 
