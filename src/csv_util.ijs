@@ -1,77 +1,62 @@
 NB. csv_util.ijs — CSV parsing, type detection, and quality reporting
-NB. API summary:
-NB.   csv_parse y           parse CSV text -> header (boxed);data (boxed matrix)
-NB.   csv_detect_types y    y is boxed data matrix -> 'q' or 'c' per column
-NB.   csv_quality_report y  y is header;data;types -> quality JSON string
-NB.   csv_to_json_matrix y  y is header;data;types -> numeric matrix JSON string
-NB.   csv_preview_json y    y is header;data -> first 10 rows JSON string
 NB.
-NB. CSV upload in JHS uses textarea: user pastes CSV text, getv retrieves it
-NB. URL-decoded. No multipart parsing needed.
+NB. Relies on:
+NB.   tables/csv  — fixcsv (string->boxed matrix), makenum, makenumcol
+NB.   convert/json — enc_json (any J value -> JSON string)
+NB.
+NB. API (all verbs in jhs locale):
+NB.   csv_parse y             CSV text -> header (boxed vec) ; data (boxed mat)
+NB.   csv_detect_types y      boxed data mat -> type char list ('q'|'c' per col)
+NB.   csv_quality_report y    header;data;types -> quality JSON string
+NB.   csv_to_json_matrix y    header;data;types -> mat_json;colnames_json;rowidx_json
+NB.   csv_preview_json y      header;data -> JSON array string of first 10 rows
+NB.
+NB. fixcsv handles quoted fields with embedded commas correctly.
+NB. makenum converts numeric-looking boxed strings to J numbers in place.
+NB. makenumcol does the same column-by-column (whole col only if fully numeric).
+NB. enc_json serialises any J value (number, string, list, boxed array) to JSON.
+NB. 3!:0 y returns the data type: 2=char, 4=integer, 8=float, 32=boxed.
 
 cocurrent 'jhs'
 
-NB. --------------------------------------------------------
-NB. csv_split_line — split a single CSV line on commas (no quoted-field handling
-NB. for now; production CSV with embedded commas should use tables/csv readcsv).
-NB. Returns boxed list of trimmed field strings.
-csv_split_line =: 3 : 0
-  parts =. ',' cut y
-  r =. dltb &.> parts
-  r
-)
+require 'tables/csv'
+require 'convert/json'
 
 NB. --------------------------------------------------------
-NB. csv_parse — parse full CSV text (LF or CR+LF line endings)
-NB. Returns header (boxed row vector) ; data (boxed nrows x ncols matrix)
-NB. Empty lines are skipped. Rows with wrong column count are dropped.
+NB. csv_parse — parse a CSV text string
+NB. y is a character string (LF or CRLF line endings both fine).
+NB. Returns (header ; datamat):
+NB.   header  — boxed vector of column name strings (from row 0)
+NB.   datamat — boxed nrows x ncols matrix of strings (rows 1..end)
+NB. Uses fixcsv which handles RFC 4180 quoted fields correctly.
+NB. Rows with wrong column count are dropped.
 csv_parse =: 3 : 0
-  NB. normalise line endings
-  txt   =. y rplc (CRLF);LF
-  lines =. LF cut txt
-  NB. drop empty lines
-  lens  =. # &.> lines
-  lines =. (0 < &> lens) # lines
-  if. 1 > # lines do.
-    r =. (0$<'') ; (0 2 $ <'')
-    return.
-  end.
-  header  =. csv_split_line > {. lines
-  ncols   =. # header
-  datalines =. }. lines
-  NB. parse each data line into a boxed row
-  rows =. csv_split_line &.> datalines
-  NB. keep only rows with the right number of columns
-  goodmask =. ncols = # &.> rows
-  rows =. goodmask # rows
-  nrows =. # rows
+  NB. fixcsv requires trailing LF to include the last line
+  txt =. y , (LF #~ LF ~: {: y)
+  mat =. fixcsv txt
+  header =. {. mat
+  ncols  =. # header
+  dmat   =. }. mat
+  nrows  =. # dmat
   if. 0 = nrows do.
-    r =. header ; (0, ncols) $ <''
+    r =. (<header) , <((0, ncols) $ <'')
     return.
   end.
-  NB. stack rows into a nrows x ncols boxed matrix
-  mat =. > rows
-  NB. ensure rank-2 even for 1 row
-  mat =. (nrows, ncols) $ mat
-  r =. header ; mat
+  NB. fixcsv always produces a rectangular matrix, no row-count guard needed
+  nrows =. # dmat
+  NB. use (<x),<y to get a 2-element boxed list; x;y would merge into a matrix
+  NB. when x is a boxed vector and y is a boxed matrix (J's ; Link behaviour)
+  r =. (<header) , <dmat
   r
 )
 
 NB. --------------------------------------------------------
-NB. csv_isnumeric — 1 if a string parses as a number (including empty as missing)
-csv_isnumeric =: 3 : 0
-  s =. dltb y
-  if. 0 = # s do. 1 return. end.    NB. empty = missing = treat as numeric
-  NB. attempt to parse; ". returns 0$0 on failure in J
-  v =. ". s
-  r =. 0 < # v
-  r
-)
-
-NB. --------------------------------------------------------
-NB. csv_detect_types — infer column type for each column
-NB. y is boxed nrows x ncols data matrix (all strings)
-NB. Returns char list: 'q' (quantitative) or 'c' (categorical) per column
+NB. csv_detect_types — infer column type from a boxed string data matrix
+NB. y is the boxed nrows x ncols data matrix returned by csv_parse.
+NB. Returns a char list: 'q' (quantitative) or 'c' (categorical) per column.
+NB. Strategy: convert whole column with makenum (sentinel _9999 for failures).
+NB.   If >= 80% of non-empty cells converted successfully -> 'q'.
+NB. 3!:0 on a converted cell: 4 or 8 = number, 32 = still boxed (string).
 csv_detect_types =: 3 : 0
   'nrows ncols' =. , $ y
   if. 0 = nrows do.
@@ -81,14 +66,27 @@ csv_detect_types =: 3 : 0
   r =. ''
   j =. 0
   while. j < ncols do.
-    col =. ((<a:),(< j)) { y        NB. extract column j as boxed vector
-    col =. > &.> col                 NB. unbox each cell
-    NB. count numeric-looking cells (ignoring empty)
-    n_numeric =. +/ csv_isnumeric &.> col
-    NB. if >= 80% of non-empty cells look numeric -> quantitative
-    nonempty =. +/ 0 < # &.> (dltb &.> col)
-    thresh =. >. 0.8 * (nonempty >. 1)
-    if. n_numeric >= thresh do.
+    col      =. j {"1 y                        NB. boxed string vector, length nrows
+    NB. trim and find non-empty cells
+    trimmed  =. dltb &.> col
+    lens     =. > # &.> trimmed
+    nonempty =. (0 < lens) # trimmed
+    nne      =. # nonempty
+    NB. attempt numeric conversion on non-empty cells
+    converted =. _9999 makenum nonempty
+    NB. count cells that became numbers: type 4 (int) or 8 (float) after unboxing
+    NB. makenum leaves non-numeric cells as boxed char vectors (type 32 in converted)
+    NB. when all cells convert, makenum returns a plain numeric array (type 4 or 8)
+    NB. so test 3!:0 on converted as a whole, or per-element if still boxed
+    convtype =. 3!:0 converted
+    if. 32 = convtype do.
+      NB. mixed or all-string result -- count cells whose unboxed type is 4 or 8
+      n_numeric =. +/ (4 8 e.~ > 3!:0 &.> converted)
+    else.
+      NB. all numeric -- makenum unboxed everything
+      n_numeric =. nne
+    end.
+    if. (0 = nne) +. (n_numeric >= >. 0.8 * nne) do.
       r =. r , 'q'
     else.
       r =. r , 'c'
@@ -99,202 +97,180 @@ csv_detect_types =: 3 : 0
 )
 
 NB. --------------------------------------------------------
-NB. csv_col_missing — count empty/NA cells in a column (boxed string vector)
+NB. csv_col_missing — count empty/whitespace-only cells in a boxed column
 csv_col_missing =: 3 : 0
-  vals =. > &.> y
-  +/ 0 = # &.> (dltb &.> vals)
+  +/ 0 = > # &.> (dltb &.> y)
 )
 
 NB. --------------------------------------------------------
-NB. csv_col_unique — count distinct non-empty values in a column
+NB. csv_col_unique — count distinct non-empty values in a boxed column
 csv_col_unique =: 3 : 0
-  vals =. dltb &.> > &.> y
-  nonempty =. (0 < # &.> vals) # vals
+  trimmed  =. dltb &.> y
+  lens     =. > # &.> trimmed
+  nonempty =. (0 < lens) # trimmed
   # ~. nonempty
 )
 
 NB. --------------------------------------------------------
-NB. csv_is_constant — 1 if all non-empty cells in a column have the same value
+NB. csv_is_constant — 1 if all non-empty cells share the same value
 csv_is_constant =: 3 : 0
-  vals =. dltb &.> > &.> y
-  nonempty =. (0 < # &.> vals) # vals
+  trimmed  =. dltb &.> y
+  lens     =. > # &.> trimmed
+  nonempty =. (0 < lens) # trimmed
   if. 1 > # nonempty do. 1 return. end.
   r =. 1 = # ~. nonempty
   r
 )
 
 NB. --------------------------------------------------------
-NB. csv_num_to_json — format a number for JSON (replacing J's _ with -)
-csv_num_to_json =: 3 : 0
-  (": y) rplc '_';'-'
-)
-
-NB. --------------------------------------------------------
-NB. csv_str_to_json — escape a string for JSON (quotes and backslashes)
-csv_str_to_json =: 3 : 0
-  s =. dltb y
-  s =. s rplc '\';'\\'
-  s =. s rplc '"';'\"'
-  s =. s rplc (LF);'\n'
-  s =. s rplc (CR);'\r'
-  '"' , s , '"'
-)
-
-NB. --------------------------------------------------------
-NB. csv_quality_report — build quality report JSON string
-NB. y is header ; data_matrix ; types_string
-NB. Returns JSON object string with per-column quality info + summary
+NB. csv_quality_report — build a quality-report JSON string
+NB. y is (header ; datamat ; types):
+NB.   header  — boxed ncols-vector of column name strings
+NB.   datamat — boxed nrows x ncols string matrix
+NB.   types   — char list 'q'|'c' per column
+NB. Returns a JSON object string.
+NB. enc_json_json_ handles all value serialisation (strings, numbers, booleans).
 csv_quality_report =: 3 : 0
   'header datamat types' =. y
   'nrows ncols' =. , $ datamat
-  NB. build per-column array
-  cols_json =. '['
+
+  NB. per-column entries
+  NB. enc_json encodes a 2 x n boxed array as a JSON object:
+  NB.   row 0 = string keys, row 1 = values (any type)
+  col_entries =. i. 0
   j =. 0
   while. j < ncols do.
     col_hdr  =. dltb > j { header
-    col_type =. j { types
-    NB. extract column as boxed vector of strings
-    if. 0 = nrows do.
-      col_vals =. 0 $ <''
-    else.
-      col_vals =. ((<a:),(< j)) { datamat
-    end.
-    n_miss    =. csv_col_missing col_vals
-    n_unique  =. csv_col_unique  col_vals
-    is_const  =. csv_is_constant col_vals
-    col_entry =. '{'
-    col_entry =. col_entry , '"name":' , (csv_str_to_json col_hdr) , ','
-    col_entry =. col_entry , '"type":"' , (1{.col_type) , '",'
-    col_entry =. col_entry , '"missing":' , (csv_num_to_json n_miss) , ','
-    col_entry =. col_entry , '"unique":' , (csv_num_to_json n_unique) , ','
-    col_entry =. col_entry , '"constant":' , (1{'false','true'{~is_const) , '}'
-    if. j < <: ncols do.
-      cols_json =. cols_json , col_entry , ','
-    else.
-      cols_json =. cols_json , col_entry
-    end.
+    col_type =. 1 {. j { types
+    col_vals =. j {"1 datamat
+    n_miss   =. csv_col_missing  col_vals
+    n_uniq   =. csv_col_unique   col_vals
+    is_const =. csv_is_constant  col_vals
+    ks =. 'name' ; 'type' ; 'missing' ; 'unique' ; 'constant'
+    vs =. col_hdr ; col_type ; n_miss ; n_uniq ; is_const
+    entry =. enc_json_json_ ks ,: vs
+    col_entries =. col_entries , < entry
     j =. >: j
   end.
-  cols_json =. cols_json , ']'
+
+  NB. summary-level counts
   n_quant =. +/ 'q' = types
   n_cat   =. +/ 'c' = types
   n_const =. 0
   j =. 0
   while. j < ncols do.
-    if. 0 = nrows do.
-      col_vals =. 0 $ <''
-    else.
-      col_vals =. ((<a:),(< j)) { datamat
-    end.
-    if. csv_is_constant col_vals do. n_const =. >: n_const end.
+    colvj =. j {"1 datamat
+    if. csv_is_constant colvj do. n_const =. >: n_const end.
     j =. >: j
   end.
-  r =. '{"rows":' , (csv_num_to_json nrows)
-  r =. r , ',"cols":' , (csv_num_to_json ncols)
-  r =. r , ',"quant":' , (csv_num_to_json n_quant)
-  r =. r , ',"cat":' , (csv_num_to_json n_cat)
-  r =. r , ',"constant_cols":' , (csv_num_to_json n_const)
-  r =. r , ',"columns":' , cols_json , '}'
+
+  NB. join col_entries with commas
+  cols_json =. '['
+  k =. 0
+  while. k < # col_entries do.
+    if. k > 0 do. cols_json =. cols_json , ',' end.
+    cols_json =. cols_json , > k { col_entries
+    k =. >: k
+  end.
+  cols_json =. cols_json , ']'
+  r =. '{"rows":'          , (": nrows)
+  r =. r , ',"cols":'          , (": ncols)
+  r =. r , ',"quant":'         , (": n_quant)
+  r =. r , ',"cat":'           , (": n_cat)
+  r =. r , ',"constant_cols":' , (": n_const)
+  r =. r , ',"columns":'       , cols_json , '}'
   r
 )
 
 NB. --------------------------------------------------------
-NB. csv_cell_to_num — convert a string cell to a number; NaN sentinel (_) for empty/bad
-csv_cell_to_num =: 3 : 0
-  s =. dltb y
-  if. 0 = # s do. _ return. end.
-  v =. ". s
-  if. 0 = # v do. _ return. end.
-  r =. > {. v
-  r
-)
-
-NB. --------------------------------------------------------
-NB. csv_to_json_matrix — convert numeric columns to a JSON 2D array
-NB. y is header ; data_matrix ; types_string
-NB. Returns JSON string: [[r0c0,...],...]  (only quantitative columns)
-NB. Rows with any _ value in quant cols are omitted as invalid.
-NB. Also returns col_names JSON array for the quant columns.
-NB. Result is (matrix_json ; colnames_json ; row_indexes_json)
+NB. csv_to_json_matrix — extract quantitative columns as a JSON 2-D numeric array
+NB. y is (header ; datamat ; types)
+NB. Rows with any non-numeric cell in a quant column are dropped.
+NB. Returns (mat_json ; colnames_json ; rowidx_json):
+NB.   mat_json     — JSON 2-D array [[v,...],...]
+NB.   colnames_json — JSON array of column name strings
+NB.   rowidx_json  — JSON array of original row indices that survived
 csv_to_json_matrix =: 3 : 0
   'header datamat types' =. y
   'nrows ncols' =. , $ datamat
-  NB. identify quantitative column indices
+
   qidx =. I. 'q' = types
   nq   =. # qidx
-  NB. build column names JSON
-  qnames =. qidx { > &.> header
-  cnames_json =. '['
-  k =. 0
-  while. k < nq do.
-    cnames_json =. cnames_json , (csv_str_to_json dltb > k { qnames)
-    if. k < <: nq do. cnames_json =. cnames_json , ',' end.
-    k =. >: k
-  end.
-  cnames_json =. cnames_json , ']'
-  NB. build numeric matrix (nrows x nq), mark invalid rows
-  mat_json   =. '['
-  rowidx_json =. '['
-  first_row  =. 1
+
+  NB. column names
+  colnames_json =. enc_json_json_ (dltb &.> qidx { header)
+
+  NB. parse each quant cell as a number; build good-row list
+  NB. Process row by row to avoid makenum's mixed-result complexity.
+  good_rows =. i. 0
+  good_nums =. i. 0         NB. will hold numeric rows as a flat list
   i =. 0
   while. i < nrows do.
-    NB. extract numeric values for this row
-    nums =. csv_cell_to_num &.> (qidx { > &.> ((<i),(<a:)) { datamat)
-    NB. skip row if any value is _
-    if. 1 e. _ = > &.> nums do.
-      i =. >: i
-    else.
-      row_json =. '['
-      k =. 0
-      while. k < nq do.
-        v =. > k { nums
-        row_json =. row_json , (csv_num_to_json v)
-        if. k < <: nq do. row_json =. row_json , ',' end.
-        k =. >: k
-      end.
-      row_json =. row_json , ']'
-      if. first_row do.
-        mat_json    =. mat_json , row_json
-        rowidx_json =. rowidx_json , (csv_num_to_json i)
-        first_row   =. 0
-      else.
-        mat_json    =. mat_json , ',' , row_json
-        rowidx_json =. rowidx_json , ',' , (csv_num_to_json i)
-      end.
-      i =. >: i
+    row_i  =. i { datamat
+    qcells =. qidx { row_i  NB. boxed strings for quant columns
+    nums   =. ". &.> (dltb &.> qcells)
+    NB. ". on empty or non-numeric string returns empty 0$0; length 0 = bad
+    allnum =. */ 0 < > # &.> nums
+    if. allnum do.
+      good_rows =. good_rows , i
+      good_nums =. good_nums , (> &.> nums)
     end.
+    i =. >: i
   end.
-  mat_json    =. mat_json , ']'
+
+  NB. encode good_rows as a JSON integer array
+  rowidx_json =. '['
+  k =. 0
+  while. k < # good_rows do.
+    if. k > 0 do. rowidx_json =. rowidx_json , ',' end.
+    rowidx_json =. rowidx_json , (": k { good_rows)
+    k =. >: k
+  end.
   rowidx_json =. rowidx_json , ']'
-  r =. mat_json ; cnames_json ; rowidx_json
+
+  if. 0 = # good_rows do.
+    mat_json =. '[]'
+    r =. mat_json ; colnames_json ; rowidx_json
+    return.
+  end.
+
+  NB. reshape good_nums into (nGoodRows x nq) numeric matrix
+  ng     =. # good_rows
+  nummat =. (ng, nq) $ good_nums
+
+  NB. encode as JSON array of arrays [[r0c0,...],[r1c0,...],...]
+  NB. enc_json on a 2-row matrix treats it as a {key:val} object, so build manually
+  mat_json =. '['
+  i =. 0
+  while. i < ng do.
+    row_json =. enc_json_json_ i { nummat
+    if. i > 0 do. mat_json =. mat_json , ',' end.
+    mat_json =. mat_json , row_json
+    i =. >: i
+  end.
+  mat_json =. mat_json , ']'
+
+  r =. mat_json ; colnames_json ; rowidx_json
   r
 )
 
 NB. --------------------------------------------------------
 NB. csv_preview_json — first 10 rows as a JSON array of objects
-NB. y is header ; data_matrix
-NB. Returns JSON string: [{"col1":"val1",...},...]
+NB. y is (header ; datamat)
+NB. Each object maps column names to cell values (as strings).
 csv_preview_json =: 3 : 0
-  'header datamat' =. y
+  header  =. > 0 { y
+  datamat =. > 1 { y
   'nrows ncols' =. , $ datamat
   nshow =. nrows <. 10
   r =. '['
   i =. 0
   while. i < nshow do.
-    obj =. '{'
-    j =. 0
-    while. j < ncols do.
-      k =. csv_str_to_json dltb > j { header
-      if. 0 = nrows do.
-        v =. csv_str_to_json ''
-      else.
-        v =. csv_str_to_json dltb > ((<i),(< j)) { datamat
-      end.
-      obj =. obj , k , ':' , v
-      if. j < <: ncols do. obj =. obj , ',' end.
-      j =. >: j
-    end.
-    obj =. obj , '}'
+    row_i =. i { datamat
+    NB. 2 x ncols boxed array: row 0 = keys, row 1 = values
+    ks  =. dltb &.> header
+    vs  =. dltb &.> row_i
+    obj =. enc_json_json_ ks ,: vs
     if. i > 0 do. r =. r , ',' end.
     r =. r , obj
     i =. >: i
