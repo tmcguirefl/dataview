@@ -211,3 +211,87 @@ db_cleartoken =: 3 : 0
   DB ddsql~ sql
   i. 0
 )
+
+NB. --------------------------------------------------------
+NB. db_insertdataset — insert a new dataset row, return new id or _1 on error
+NB. y is (user_id ; name ; row_count ; col_count ; quant_cols_json ;
+NB.        cat_cols_json ; all_cols_json ; raw_data_json ;
+NB.        quality_report_json ; preview_json)
+db_insertdataset =: 3 : 0
+  r =. _1
+  'uid dsname nrows ncols qcols ccols acols rawdata qrep prev' =. y
+  sql =. 'INSERT INTO datasets'
+  sql =. sql , ' (user_id,name,row_count,col_count,quant_cols,cat_cols,all_cols,raw_data,quality_report,preview_data)'
+  sql =. sql , ' VALUES ('
+  sql =. sql , (": uid) , ','
+  sql =. sql , '''' , (sql_esc dltb dsname) , ''','
+  sql =. sql , (": nrows) , ','
+  sql =. sql , (": ncols) , ','
+  sql =. sql , '''' , (sql_esc dltb qcols) , ''','
+  sql =. sql , '''' , (sql_esc dltb ccols) , ''','
+  sql =. sql , '''' , (sql_esc dltb acols) , ''','
+  sql =. sql , '''' , (sql_esc dltb rawdata) , ''','
+  sql =. sql , '''' , (sql_esc dltb qrep) , ''','
+  sql =. sql , '''' , (sql_esc dltb prev) , ''')'
+  rc =. DB ddsql~ sql
+  if. 0 ~: rc do. r return. end.
+  sh =. DB ddsel~ 'SELECT last_insert_rowid()'
+  if. _1 = sh do. r return. end.
+  rows =. ddfet sh , _1
+  nrows2 =. # rows
+  if. 0 = nrows2 do. r return. end.
+  r =. > > {. rows
+  r
+)
+
+NB. --------------------------------------------------------
+NB. db_listdatasets — list all datasets for a user
+NB. y is user_id (integer)
+NB. returns boxed nrows x 7 matrix (id;name;row_count;col_count;quant_cols;cat_cols;upload_ts)
+NB. or '' if none
+db_listdatasets =: 3 : 0
+  r =. ''
+  sql =. 'SELECT id,name,row_count,col_count,quant_cols,cat_cols,upload_ts'
+  sql =. sql , ' FROM datasets WHERE user_id=' , (": y)
+  sql =. sql , ' ORDER BY upload_ts DESC'
+  sh =. DB ddsel~ sql
+  if. _1 = sh do. r return. end.
+  rows =. ddfet sh , _1
+  nrows =. # rows
+  if. 0 = nrows do. r return. end.
+  r =. rows
+  r
+)
+
+NB. --------------------------------------------------------
+NB. db_getdataset — fetch one dataset row by id (checks user ownership)
+NB. y is (dataset_id ; user_id) boxed pair
+NB. returns boxed row (all columns) or '' if not found / wrong user
+db_getdataset =: 3 : 0
+  r =. ''
+  'dsid uid' =. y
+  sql =. 'SELECT id,name,row_count,col_count,quant_cols,cat_cols,all_cols,'
+  sql =. sql , 'raw_data,quality_report,preview_data,upload_ts'
+  sql =. sql , ' FROM datasets WHERE id=' , (": dsid)
+  sql =. sql , ' AND user_id=' , (": uid)
+  sh =. DB ddsel~ sql
+  if. _1 = sh do. r return. end.
+  rows =. ddfet sh , _1
+  nrows =. # rows
+  if. 0 = nrows do. r return. end.
+  r =. {. rows
+  r
+)
+
+NB. --------------------------------------------------------
+NB. db_deletedataset — delete a dataset by id (checks ownership)
+NB. y is (dataset_id ; user_id)
+NB. returns 1 on success, 0 on error
+db_deletedataset =: 3 : 0
+  r =. 0
+  'dsid uid' =. y
+  sql =. 'DELETE FROM datasets WHERE id=' , (": dsid) , ' AND user_id=' , (": uid)
+  rc =. DB ddsql~ sql
+  if. 0 = rc do. r =. 1 end.
+  r
+)
