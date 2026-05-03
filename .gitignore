@@ -3,14 +3,8 @@
 .AppleDouble
 .LSOverride
 
-# Browser temp files (Brave, Chrome, etc.)
-docs/.com.brave.Browser.*
-docs/.com.google.Chrome.*
-docs/.com.microsoft.Edge.*
-
-# Obsidian vault metadata
-docs/.obsidian/workspace.json
-docs/.obsidian/workspace-mobile.json
+# Local-only documentation vault
+docs/
 
 # Runtime session data (in-memory store snapshots)
 data/
