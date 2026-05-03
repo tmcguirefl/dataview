@@ -6,8 +6,8 @@
 # Local-only documentation vault
 docs/
 
-# Runtime session data (in-memory store snapshots)
-data/
+# Runtime database (local only)
+data/*.db
 
 # J session state
 *.ijx
