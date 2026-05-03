@@ -8,6 +8,7 @@ NB.   db_insertuser y     INSERT user, y is name;pwhash;salt -> new id or _1
 NB.   db_settoken y       UPDATE session_token WHERE id=y0, token=y1
 NB.   db_userbytoken y    SELECT user row WHERE session_token=y -> boxed row or ''
 NB.   db_cleartoken y     UPDATE session_token=NULL WHERE id=y
+NB.   db_updateprofile y  UPDATE displayname,email WHERE id=y0
 NB.
 NB. All queries use sql_esc for safe literal embedding (no ddparm — ddparm
 NB. has a complex argument format and ddsql/ddsel cover our needs fine).
@@ -467,6 +468,22 @@ NB. y is km_run_id (integer); returns 1 on success, 0 on error
 db_deletekm =: 3 : 0
   r =. 0
   sql =. 'DELETE FROM km_runs WHERE id=' , (": {. , y)
+  rc =. DB ddsql~ sql
+  if. 0 = rc do. r =. 1 end.
+  r
+)
+
+NB. --------------------------------------------------------
+NB. db_updateprofile — update displayname and email for a user
+NB. y is (user_id ; displayname ; email)
+NB. returns 1 on success, 0 on error
+db_updateprofile =: 3 : 0
+  r =. 0
+  'uid dname email' =. y
+  uid =. {. , uid
+  sql =. 'UPDATE users SET displayname=''' , (sql_esc dltb dname) , ''','
+  sql =. sql , 'email=''' , (sql_esc dltb email) , ''''
+  sql =. sql , ' WHERE id=' , (": uid)
   rc =. DB ddsql~ sql
   if. 0 = rc do. r =. 1 end.
   r

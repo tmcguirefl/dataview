@@ -31,6 +31,8 @@ NB. ── Tab bar ────────────────────�
 '<button class="ms-tab ms-tab-active" onclick="switchTab(''tab-data'')">Datasets</button>'
 '<button class="ms-tab" onclick="switchTab(''tab-pca'')">PCA</button>'
 '<button class="ms-tab" onclick="switchTab(''tab-clusters'')">Clusters</button>'
+'<button class="ms-tab" onclick="switchTab(''tab-analysis'')">Analysis</button>'
+'<button class="ms-tab" onclick="switchTab(''tab-profile'')">Profile</button>'
 '</nav>'
 
 '<main class="ms-main">'
@@ -224,6 +226,80 @@ NB. ── Right panel: cluster scatter + comparison ─────────
 '</div>'
 '</div>'
 
+NB. ════════════════════════════════════════════════════════════════════════
+NB. TAB 4 — Analysis
+NB. ════════════════════════════════════════════════════════════════════════
+'<div id="tab-analysis" class="ms-tab-panel" style="display:none">'
+'<div class="ms-columns">'
+
+NB. ── Left panel: dataset selector + stats ──────────────────────────────
+'<section class="ms-panel ms-left">'
+'<h2>Column Statistics</h2>'
+'<div class="ms-pca-form">'
+'<label>Dataset</label>'
+'<select id="an-dsid" class="ms-select">'
+'<option value="">— select a dataset —</option>'
+'</select>'
+'<div class="ms-upload-actions" style="margin-top:12px">'
+'anstats' jhb 'Load Stats'
+'<span id="an-msg" class="ms-msg"></span>'
+'</div>'
+'</div>'
+'<div id="an-stats-wrap" style="display:none">'
+'<table class="ms-table">'
+'<thead><tr><th>Column</th><th>Min</th><th>Max</th><th>Mean</th><th>Std</th><th>Median</th><th>N</th></tr></thead>'
+'<tbody id="an-stats-tbody"></tbody>'
+'</table>'
+'</div>'
+'</section>'
+
+NB. ── Right panel: correlation heatmap + report download ─────────────────
+'<section class="ms-panel ms-right">'
+'<h2>Correlation Matrix</h2>'
+'<p id="an-hint" class="ms-hint">Select a dataset and click Load Stats to see correlation.</p>'
+'<div id="an-corr-wrap" style="display:none">'
+'<div id="plot-corr" class="ms-plot" style="height:350px"></div>'
+'</div>'
+'<div id="an-report-wrap" style="display:none;margin-top:16px">'
+'<h2>PCA Report</h2>'
+'<p class="ms-hint" style="margin-bottom:8px">Select a PCA run to download its HTML report.</p>'
+'<div class="ms-pca-form">'
+'<label>PCA Run</label>'
+'<select id="an-prid" class="ms-select">'
+'<option value="">— select a PCA run —</option>'
+'</select>'
+'<div class="ms-upload-actions" style="margin-top:8px">'
+'anreport' jhb 'Download Report'
+'<span id="an-report-msg" class="ms-msg"></span>'
+'</div>'
+'</div>'
+'</div>'
+'</section>'
+
+'</div>'
+'</div>'
+
+NB. ════════════════════════════════════════════════════════════════════════
+NB. TAB 5 — Profile
+NB. ════════════════════════════════════════════════════════════════════════
+'<div id="tab-profile" class="ms-tab-panel" style="display:none">'
+'<div class="ms-columns">'
+'<section class="ms-panel ms-left">'
+'<h2>Your Profile</h2>'
+'<div class="ms-upload-form">'
+'<label>Display Name</label>'
+'prof_displayname' jhtext '';40
+'<label style="margin-top:8px">Email</label>'
+'prof_email' jhtext '';40
+'<div class="ms-upload-actions" style="margin-top:12px">'
+'saveprofile' jhb 'Save'
+'<span id="prof-msg" class="ms-msg"></span>'
+'</div>'
+'</div>'
+'</section>'
+'</div>'
+'</div>'
+
 '</main>'
 
 NB. Hidden fields
@@ -235,6 +311,8 @@ NB. Hidden fields
 '<input type="hidden" id="km-prid-h"  name="km-prid-h"  value="">'
 '<input type="hidden" id="cmp-rid-a-h" name="cmp-rid-a-h" value="">'
 '<input type="hidden" id="cmp-rid-b-h" name="cmp-rid-b-h" value="">'
+'<input type="hidden" id="an-dsid-h"   name="an-dsid-h"   value="">'
+'<input type="hidden" id="an-prid-h"   name="an-prid-h"   value="">'
 
 NB. Hidden refresh button triggered on body load
 '<span style="display:none">'
@@ -329,7 +407,7 @@ NB. ── Client JavaScript ─────────────────
 JS =: 0 : 0
 // ── Tab switching ─────────────────────────────────────────────────────────
 function switchTab(id) {
-  ['tab-data','tab-pca','tab-clusters'].forEach(function(t) {
+  ['tab-data','tab-pca','tab-clusters','tab-analysis','tab-profile'].forEach(function(t) {
     jbyid(t).style.display = t === id ? '' : 'none';
   });
   document.querySelectorAll('.ms-tab').forEach(function(btn) {
@@ -337,6 +415,8 @@ function switchTab(id) {
   });
   if (id === 'tab-pca') refreshPcaDatasetDropdown();
   if (id === 'tab-clusters') refreshKmPcaRunDropdown();
+  if (id === 'tab-analysis') refreshAnalysisDropdowns();
+  if (id === 'tab-profile') loadProfileFields();
 }
 
 // ── Upload ──────────────────────────────────────────────────────────────────
@@ -885,6 +965,166 @@ function renderComparison(runA, runB) {
   makeScree(runB, 'plot-cmp-b', 'cmp-label-b');
 }
 
+// ── Analysis tab ──────────────────────────────────────────────────────────
+function refreshAnalysisDropdowns() {
+  // Copy datasets into an-dsid from ds-table
+  var sel  = jbyid('an-dsid');
+  var prev = sel.value;
+  while (sel.options.length > 1) sel.remove(1);
+  var tbodies = jbyid('ds-table').querySelectorAll('tbody tr');
+  tbodies.forEach(function(tr) {
+    var btn = tr.querySelector('.ms-view');
+    if (!btn) return;
+    var match = btn.getAttribute('onclick').match(/viewQuality\((\d+)/);
+    if (!match) return;
+    var cells = tr.querySelectorAll('td');
+    var opt = document.createElement('option');
+    opt.value = match[1];
+    opt.textContent = cells[0].textContent;
+    if (match[1] === prev) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  // Copy PCA runs into an-prid
+  var psel = jbyid('an-prid');
+  var pprev = psel.value;
+  while (psel.options.length > 1) psel.remove(1);
+  (window._allPcaRuns || []).forEach(function(r) {
+    var opt = document.createElement('option');
+    opt.value = r.id;
+    opt.textContent = 'Run #' + r.id + ' (' + r.n_components + ' PC, ' + r.ts.substring(0,10) + ')';
+    if (String(r.id) === pprev) opt.selected = true;
+    psel.appendChild(opt);
+  });
+}
+
+function ev_anstats_click() {
+  var dsid = jbyid('an-dsid').value;
+  if (!dsid) { showMsg('an-msg','Select a dataset first.','err'); return; }
+  jbyid('an-dsid-h').value = dsid;
+  jform.jmid.value  = 'anstats';
+  jform.jtype.value = 'click';
+  showMsg('an-msg','Loading…','');
+  jdoajax(['an-dsid-h'], '');
+}
+function ev_anstats_click_ajax(ts) {
+  if (ts[0]==='1') {
+    showMsg('an-msg','','');
+    var stats = JSON.parse(ts[1]);
+    renderAnalysisStats(stats);
+    loadAnalysisCorr(jbyid('an-dsid-h').value);
+  } else {
+    showMsg('an-msg', ts[1], 'err');
+  }
+}
+
+function renderAnalysisStats(data) {
+  var tbody = jbyid('an-stats-tbody');
+  tbody.innerHTML = '';
+  var cols = data.col_names;
+  var stats = data.stats;
+  cols.forEach(function(col, i) {
+    var s = stats[i];
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + esc(col) + '</td>' +
+      '<td>' + s.min.toFixed(3) + '</td>' +
+      '<td>' + s.max.toFixed(3) + '</td>' +
+      '<td>' + s.mean.toFixed(3) + '</td>' +
+      '<td>' + s.std.toFixed(3) + '</td>' +
+      '<td>' + s.median.toFixed(3) + '</td>' +
+      '<td>' + s.n + '</td>';
+    tbody.appendChild(tr);
+  });
+  jbyid('an-stats-wrap').style.display = '';
+  jbyid('an-report-wrap').style.display = '';
+}
+
+function loadAnalysisCorr(dsid) {
+  jbyid('an-dsid-h').value = dsid;
+  jform.jmid.value  = 'ancorr';
+  jform.jtype.value = 'click';
+  jdoajax(['an-dsid-h'], '');
+}
+function ev_ancorr_click_ajax(ts) {
+  if (ts[0]==='1') {
+    var corr = JSON.parse(ts[1]);
+    renderCorrHeatmap(corr);
+  } else {
+    jbyid('an-hint').textContent = ts[1];
+  }
+}
+
+function renderCorrHeatmap(data) {
+  jbyid('an-hint').style.display = 'none';
+  jbyid('an-corr-wrap').style.display = '';
+  var cols = data.col_names;
+  var mat  = data.matrix;
+  Plotly.newPlot('plot-corr', [{
+    z: mat, x: cols, y: cols,
+    type: 'heatmap',
+    colorscale: 'RdBu',
+    zmid: 0,
+    zmin: -1, zmax: 1,
+    text: mat.map(function(row){return row.map(function(v){return v.toFixed(2);});}),
+    texttemplate: '%{text}',
+    showscale: true
+  }], {
+    margin: {t:20,r:60,b:80,l:80}
+  }, {responsive: true, displaylogo: false});
+}
+
+function ev_anreport_click() {
+  var prid = jbyid('an-prid').value;
+  if (!prid) { showMsg('an-report-msg','Select a PCA run.','err'); return; }
+  jbyid('an-prid-h').value = prid;
+  jform.jmid.value  = 'anreport';
+  jform.jtype.value = 'click';
+  showMsg('an-report-msg','Generating…','');
+  jdoajax(['an-prid-h'], '');
+}
+function ev_anreport_click_ajax(ts) {
+  if (ts[0]==='1') {
+    showMsg('an-report-msg','','');
+    var html = ts[1];
+    var blob = new Blob([html], {type:'text/html'});
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'pca_report_run' + jbyid('an-prid-h').value + '.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    showMsg('an-report-msg','Downloaded.','ok');
+  } else {
+    showMsg('an-report-msg', ts[1], 'err');
+  }
+}
+
+// ── Profile tab ───────────────────────────────────────────────────────────
+function loadProfileFields() {
+  jform.jmid.value  = 'loadprofile';
+  jform.jtype.value = 'click';
+  jdoajax([], '');
+}
+function ev_loadprofile_click_ajax(ts) {
+  if (ts[0]==='1') {
+    var p = JSON.parse(ts[1]);
+    jbyid('prof_displayname').value = p.displayname || '';
+    jbyid('prof_email').value = p.email || '';
+  }
+}
+
+function ev_saveprofile_click() {
+  jform.jmid.value  = 'saveprofile';
+  jform.jtype.value = 'click';
+  showMsg('prof-msg','Saving…','');
+  jdoajax(['prof_displayname','prof_email'], '');
+}
+function ev_saveprofile_click_ajax(ts) {
+  if (ts[0]==='1') showMsg('prof-msg','Saved!','ok');
+  else showMsg('prof-msg', ts[1], 'err');
+}
+
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -956,6 +1196,16 @@ jev_get =: jev =: 3 : 0
     ms_delkmrun''
   elseif. 'compareruns_click' -: mid,'_',type do.
     ms_compareruns''
+  elseif. 'anstats_click' -: mid,'_',type do.
+    ms_anstats''
+  elseif. 'ancorr_click' -: mid,'_',type do.
+    ms_ancorr''
+  elseif. 'anreport_click' -: mid,'_',type do.
+    ms_anreport''
+  elseif. 'loadprofile_click' -: mid,'_',type do.
+    ms_loadprofile''
+  elseif. 'saveprofile_click' -: mid,'_',type do.
+    ms_saveprofile''
   else.
     jhrajax ''
   end.
@@ -1218,5 +1468,66 @@ ms_compareruns =: 3 : 0
   jhrajax '1',JASEP,json_a,JASEP,json_b
   catch.
     jhrajax '0',JASEP,'Compare error: ',13!:12''
+  end.
+)
+
+NB. ── Analysis stats handler ─────────────────────────────────────────────
+ms_anstats =: 3 : 0
+  dsid =. ". dltb getv 'an-dsid-h'
+  json =. analysis_stats_jhs_ dsid
+  if. 0 < +/ ('"error"' E. json) do.
+    jhrajax '0',JASEP,json
+    return.
+  end.
+  jhrajax '1',JASEP,json
+)
+
+NB. ── Analysis correlation handler ──────────────────────────────────────
+ms_ancorr =: 3 : 0
+  dsid =. ". dltb getv 'an-dsid-h'
+  json =. analysis_corr_jhs_ dsid
+  if. 0 < +/ ('"error"' E. json) do.
+    jhrajax '0',JASEP,json
+    return.
+  end.
+  jhrajax '1',JASEP,json
+)
+
+NB. ── Report download handler ────────────────────────────────────────────
+NB. Returns the full HTML as the second JASEP segment (client creates a Blob)
+ms_anreport =: 3 : 0
+  prid =. ". dltb getv 'an-prid-h'
+  html =. report_build_jhs_ prid
+  if. 0 = # html do.
+    jhrajax '0',JASEP,'PCA run not found.'
+    return.
+  end.
+  jhrajax '1',JASEP,html
+)
+
+NB. ── Load profile fields handler ────────────────────────────────────────
+ms_loadprofile =: 3 : 0
+  uid  =. MS_UID_jhs_
+  row  =. db_getuserbyid_jhs_ uid
+  if. 0 = # row do.
+    jhrajax '0',JASEP,'User not found.'
+    return.
+  end.
+  dname =. dltb > 5 { row
+  email =. dltb > 6 { row
+  json =. '{"displayname":' , (enc_json_json_ dname) , ',"email":' , (enc_json_json_ email) , '}'
+  jhrajax '1',JASEP,json
+)
+
+NB. ── Save profile handler ────────────────────────────────────────────────
+ms_saveprofile =: 3 : 0
+  uid    =. MS_UID_jhs_
+  dname  =. dltb getv 'prof_displayname'
+  email  =. dltb getv 'prof_email'
+  ok     =. db_updateprofile_jhs_ uid ; dname ; email
+  if. ok do.
+    jhrajax '1'
+  else.
+    jhrajax '0',JASEP,'Save failed.'
   end.
 )

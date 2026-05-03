@@ -14,6 +14,8 @@ load 'src/csv_util.ijs'
 load 'src/preprocess.ijs'
 load 'src/pca.ijs'
 load 'src/kmeans.ijs'
+load 'src/analysis.ijs'
+load 'src/report.ijs'
 
 NB. jhs-core globals not defined when running without jhs/core
 JASEP_jhs_ =: '|'
@@ -384,6 +386,98 @@ run_pca_tests =: 3 : 0
 MS_UID_jhs_  =: uid
 MS_USER_jhs_ =: 'testuser'
 run_pca_tests dsid ; uid
+
+NB. ══════════════════════════════════════════════════════════════════════════
+section 'analysis_stats'
+NB. ══════════════════════════════════════════════════════════════════════════
+
+astats =. analysis_stats_jhs_ dsid
+'analysis_stats: starts {' t_ok '{' -: {. astats
+'analysis_stats: has col_names' t_ok 0 < +/ ('"col_names"' E. astats)
+'analysis_stats: has stats'     t_ok 0 < +/ ('"stats"'     E. astats)
+'analysis_stats: has min'       t_ok 0 < +/ ('"min"'       E. astats)
+'analysis_stats: has max'       t_ok 0 < +/ ('"max"'       E. astats)
+'analysis_stats: has mean'      t_ok 0 < +/ ('"mean"'      E. astats)
+'analysis_stats: has std'       t_ok 0 < +/ ('"std"'       E. astats)
+'analysis_stats: has median'    t_ok 0 < +/ ('"median"'    E. astats)
+
+NB. Test with non-existent dataset returns error key
+('analysis_stats: unknown ds' ; 1) t_eq 0 < +/ ('"error"' E. analysis_stats_jhs_ 99999)
+
+NB. ══════════════════════════════════════════════════════════════════════════
+section 'analysis_corr'
+NB. ══════════════════════════════════════════════════════════════════════════
+
+acorr =. analysis_corr_jhs_ dsid
+'analysis_corr: starts {' t_ok '{' -: {. acorr
+'analysis_corr: has col_names' t_ok 0 < +/ ('"col_names"' E. acorr)
+'analysis_corr: has matrix'    t_ok 0 < +/ ('"matrix"'    E. acorr)
+
+NB. Parse matrix and verify symmetry and diagonal = 1
+require 'convert/json'
+acorr_parsed =. dec_json_json_ acorr
+NB. extract 'matrix' field
+run_corr_checks =: 3 : 0
+  NB. dec_json_json_ on a JSON object returns (keys_array ; values_array)
+  NB. values side may be a mixed array — index directly via k { 1 { parsed
+  parsed =. y
+  keys =. > 0 { parsed
+  NB. find 'matrix' key index
+  kidx =. _1
+  k =. 0
+  while. k < # keys do.
+    if. (dltb > k { keys) -: 'matrix' do. kidx =. k end.
+    k =. >: k
+  end.
+  if. _1 = kidx do.
+    fail 'analysis_corr: could not parse matrix'
+    return.
+  end.
+  mat_box =. > kidx { 1 { parsed
+  nmat =. # mat_box
+  NB. check diagonal entries are ~1 (corr of col with itself)
+  diag_ok =. 1
+  i =. 0
+  while. i < nmat do.
+    row_i =. > > &.> i { mat_box
+    val   =. i { row_i
+    if. 0.001 < | 1 - val do. diag_ok =. 0 end.
+    i =. >: i
+  end.
+  'analysis_corr: diagonal ~= 1' t_ok diag_ok
+  NB. check matrix is square (nmat x nmat)
+  ('analysis_corr: matrix is square' ; 1) t_eq nmat = # > > &.> 0 { mat_box
+)
+run_corr_checks acorr_parsed
+
+NB. ══════════════════════════════════════════════════════════════════════════
+section 'db_updateprofile'
+NB. ══════════════════════════════════════════════════════════════════════════
+
+('db_updateprofile: ok' ; 1) t_eq db_updateprofile_jhs_ uid ; 'Test User' ; 'test@example.com'
+urow_p =. db_getuserbyid_jhs_ uid
+('db_updateprofile: displayname' ; 'Test User')         t_eq dltb > 5 { urow_p
+('db_updateprofile: email'       ; 'test@example.com')  t_eq dltb > 6 { urow_p
+
+NB. ══════════════════════════════════════════════════════════════════════════
+section 'report_build'
+NB. ══════════════════════════════════════════════════════════════════════════
+
+NB. Need a live PCA run — re-run PCA on dsid (PCA run was deleted above by run_pca_tests)
+rpt_pca_res =. pca_run_jhs_ dsid ; 1 ; (<'drop_const') , <'scale_std'
+rpt_run_id  =. > 0 { rpt_pca_res
+
+rpt_html =. report_build_jhs_ rpt_run_id
+'report_build: non-empty'      t_ok 0 < # rpt_html
+'report_build: starts DOCTYPE' t_ok 0 < +/ ('DOCTYPE' E. rpt_html)
+'report_build: has title tag'  t_ok 0 < +/ ('<title>' E. rpt_html)
+'report_build: has table'      t_ok 0 < +/ ('<table>' E. rpt_html)
+'report_build: has PC1'        t_ok 0 < +/ ('PC1' E. rpt_html)
+'report_build: has dataset name' t_ok 0 < +/ ('iris_test' E. rpt_html)
+'report_build: ends html'      t_ok 0 < +/ ('</html>' E. rpt_html)
+
+NB. Cleanup this extra run
+db_deletepcarun_jhs_ rpt_run_id
 
 NB. ── db_deletedataset ────────────────────────────────────────────────────────
 ('db_deletedataset: ok' ; 1) t_eq db_deletedataset_jhs_ dsid ; uid
