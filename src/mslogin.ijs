@@ -63,7 +63,7 @@ jev_get =: jev =: 3 : 0
   if. 0 = # mid do.
     NB. GET — render page (or redirect if already logged in)
     if. _1 ~: MS_UID_jhs_ do.
-      jhrcmds 'pageopen *msdashboard'
+      jhrcmds 'eval location.href=''/msdashboard'''
       return.
     end.
     'ModelScope' jhr ''

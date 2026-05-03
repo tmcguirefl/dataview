@@ -1159,7 +1159,7 @@ jev_get =: jev =: 3 : 0
   type =. getv 'jtype'
   if. 0 = # mid do.
     if. _1 = MS_UID_jhs_ do.
-      jhrcmds 'pageopen *mslogin'
+      jhrcmds 'eval location.href=''/mslogin'''
       return.
     end.
     jhcmds 'set ms-whoami *Signed in as ',MS_USER_jhs_
