@@ -28,11 +28,11 @@ jhh1 'ModelScope'
 
 NB. ── Tab bar ─────────────────────────────────────────────────────────────
 '<nav class="ms-tabs">'
-'<button class="ms-tab ms-tab-active" onclick="switchTab(''tab-data'')">Datasets</button>'
-'<button class="ms-tab" onclick="switchTab(''tab-pca'')">PCA</button>'
-'<button class="ms-tab" onclick="switchTab(''tab-clusters'')">Clusters</button>'
-'<button class="ms-tab" onclick="switchTab(''tab-analysis'')">Analysis</button>'
-'<button class="ms-tab" onclick="switchTab(''tab-profile'')">Profile</button>'
+'<button type="button" class="ms-tab ms-tab-active" onclick="switchTab(''tab-data'')">Datasets</button>'
+'<button type="button" class="ms-tab" onclick="switchTab(''tab-pca'')">PCA</button>'
+'<button type="button" class="ms-tab" onclick="switchTab(''tab-clusters'')">Clusters</button>'
+'<button type="button" class="ms-tab" onclick="switchTab(''tab-analysis'')">Analysis</button>'
+'<button type="button" class="ms-tab" onclick="switchTab(''tab-profile'')">Profile</button>'
 '</nav>'
 
 '<main class="ms-main">'
