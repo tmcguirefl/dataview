@@ -45,7 +45,7 @@ db_open =: 3 : 0
 
 NB. db_close — disconnect
 db_close =: 3 : 0
-  if. _1 ~: DB do. dddis__DB'' end.
+  if. _1 ~: DB do. dddis DB end.
   DB =: _1
 )
 
@@ -104,6 +104,17 @@ db_ensure_schema =: 3 : 0
   sql =. sql , ' ,created_at TEXT DEFAULT (datetime(''now'')))'
   rc =. DB ddsql~ sql
   if. 0 ~: rc do. echo 'WARN: create pca_runs table rc=' , ": rc end.
+
+  sql =. 'CREATE TABLE IF NOT EXISTS km_runs'
+  sql =. sql , ' (id INTEGER PRIMARY KEY AUTOINCREMENT'
+  sql =. sql , ' ,pca_run_id INTEGER NOT NULL REFERENCES pca_runs(id) ON DELETE CASCADE'
+  sql =. sql , ' ,k INTEGER NOT NULL'
+  sql =. sql , ' ,labels TEXT'
+  sql =. sql , ' ,centroids TEXT'
+  sql =. sql , ' ,n_samples INTEGER DEFAULT 0'
+  sql =. sql , ' ,created_at TEXT DEFAULT (datetime(''now'')))'
+  rc =. DB ddsql~ sql
+  if. 0 ~: rc do. echo 'WARN: create km_runs table rc=' , ": rc end.
 
   echo 'db: schema ready'
 )
@@ -179,7 +190,7 @@ db_insertuser =: 3 : 0
   rows =. ddfet sh , _1
   nrows =. # rows
   if. 0 = nrows do. r return. end.
-  r =. > > {. rows
+  r =. > {. , > > {. rows
   r
 )
 
@@ -187,6 +198,7 @@ NB. db_settoken — store session token for user id
 NB. y is (userid ; token) boxed pair
 db_settoken =: 3 : 0
   'uid tok' =. y
+  uid =. {. , uid
   sql =. 'UPDATE users SET session_token=''' , (sql_esc dltb tok) , ''' WHERE id=' , (": uid)
   DB ddsql~ sql
   i. 0
@@ -220,6 +232,7 @@ NB.        quality_report_json ; preview_json)
 db_insertdataset =: 3 : 0
   r =. _1
   'uid dsname nrows ncols qcols ccols acols rawdata qrep prev' =. y
+  uid =. {. , uid     NB. ensure scalar for ": formatting
   sql =. 'INSERT INTO datasets'
   sql =. sql , ' (user_id,name,row_count,col_count,quant_cols,cat_cols,all_cols,raw_data,quality_report,preview_data)'
   sql =. sql , ' VALUES ('
@@ -240,7 +253,7 @@ db_insertdataset =: 3 : 0
   rows =. ddfet sh , _1
   nrows2 =. # rows
   if. 0 = nrows2 do. r return. end.
-  r =. > > {. rows
+  r =. > {. , > > {. rows
   r
 )
 
@@ -252,7 +265,7 @@ NB. or '' if none
 db_listdatasets =: 3 : 0
   r =. ''
   sql =. 'SELECT id,name,row_count,col_count,quant_cols,cat_cols,upload_ts'
-  sql =. sql , ' FROM datasets WHERE user_id=' , (": y)
+  sql =. sql , ' FROM datasets WHERE user_id=' , (": {. , y)
   sql =. sql , ' ORDER BY upload_ts DESC'
   sh =. DB ddsel~ sql
   if. _1 = sh do. r return. end.
@@ -270,6 +283,8 @@ NB. returns boxed row (all columns) or '' if not found / wrong user
 db_getdataset =: 3 : 0
   r =. ''
   'dsid uid' =. y
+  dsid =. {. , dsid
+  uid  =. {. , uid
   sql =. 'SELECT id,name,row_count,col_count,quant_cols,cat_cols,all_cols,'
   sql =. sql , 'raw_data,quality_report,preview_data,upload_ts'
   sql =. sql , ' FROM datasets WHERE id=' , (": dsid)
@@ -290,6 +305,8 @@ NB. returns 1 on success, 0 on error
 db_deletedataset =: 3 : 0
   r =. 0
   'dsid uid' =. y
+  dsid =. {. , dsid
+  uid  =. {. , uid
   sql =. 'DELETE FROM datasets WHERE id=' , (": dsid) , ' AND user_id=' , (": uid)
   rc =. DB ddsql~ sql
   if. 0 = rc do. r =. 1 end.
@@ -304,6 +321,9 @@ NB.        n_samples ; preproc_opts_json ; preproc_report_json ; row_indexes_jso
 db_insertpcarun =: 3 : 0
   r =. _1
   'dsid ncomp ev_json allev_json load_json tx_json cn_json nsamp ppopt_json pprep_json ridx_json' =. y
+  dsid  =. {. , dsid    NB. ensure scalar
+  ncomp =. {. , ncomp
+  nsamp =. {. , nsamp
   sql =. 'INSERT INTO pca_runs'
   sql =. sql , ' (dataset_id,n_components,explained_var,all_ev,loadings,transformed,'
   sql =. sql , '  col_names,n_samples,preproc_opts,preproc_report,row_indexes)'
@@ -326,7 +346,7 @@ db_insertpcarun =: 3 : 0
   rows =. ddfet sh , _1
   nrows2 =. # rows
   if. 0 = nrows2 do. r return. end.
-  r =. > > {. rows
+  r =. > {. , > > {. rows
   r
 )
 
@@ -338,7 +358,7 @@ NB. columns: id ; n_components ; n_samples ; preproc_opts ; is_pinned ; created_
 db_listpcaruns =: 3 : 0
   r =. ''
   sql =. 'SELECT id,n_components,n_samples,preproc_opts,is_pinned,created_at'
-  sql =. sql , ' FROM pca_runs WHERE dataset_id=' , (": y)
+  sql =. sql , ' FROM pca_runs WHERE dataset_id=' , (": {. , y)
   sql =. sql , ' ORDER BY created_at DESC'
   sh =. DB ddsel~ sql
   if. _1 = sh do. r return. end.
@@ -358,7 +378,7 @@ db_getpcarun =: 3 : 0
   sql =. 'SELECT id,dataset_id,n_components,explained_var,all_ev,loadings,'
   sql =. sql , 'transformed,col_names,n_samples,preproc_opts,preproc_report,'
   sql =. sql , 'row_indexes,is_pinned,notes,created_at'
-  sql =. sql , ' FROM pca_runs WHERE id=' , (": y)
+  sql =. sql , ' FROM pca_runs WHERE id=' , (": {. , y)
   sh =. DB ddsel~ sql
   if. _1 = sh do. r return. end.
   rows =. ddfet sh , _1
@@ -374,7 +394,79 @@ NB. y is pca_run_id (integer)
 NB. returns 1 on success, 0 on error
 db_deletepcarun =: 3 : 0
   r =. 0
-  sql =. 'DELETE FROM pca_runs WHERE id=' , (": y)
+  sql =. 'DELETE FROM pca_runs WHERE id=' , (": {. , y)
+  rc =. DB ddsql~ sql
+  if. 0 = rc do. r =. 1 end.
+  r
+)
+
+NB. --------------------------------------------------------
+NB. db_insertkm — insert a k-means run, return new id or _1
+NB. y is (pca_run_id ; k ; labels_json ; centroids_json ; n_samples)
+db_insertkm =: 3 : 0
+  r =. _1
+  'prid k lbl_json cen_json nsamp' =. y
+  prid  =. {. , prid
+  k     =. {. , k
+  nsamp =. {. , nsamp
+  sql =. 'INSERT INTO km_runs (pca_run_id,k,labels,centroids,n_samples) VALUES ('
+  sql =. sql , (": prid) , ','
+  sql =. sql , (": k) , ','
+  sql =. sql , '''' , (sql_esc dltb lbl_json)  , ''','
+  sql =. sql , '''' , (sql_esc dltb cen_json)  , ''','
+  sql =. sql , (": nsamp) , ')'
+  rc =. DB ddsql~ sql
+  if. 0 ~: rc do. r return. end.
+  sh =. DB ddsel~ 'SELECT last_insert_rowid()'
+  if. _1 = sh do. r return. end.
+  rows =. ddfet sh , _1
+  nrows2 =. # rows
+  if. 0 = nrows2 do. r return. end.
+  r =. > {. , > > {. rows
+  r
+)
+
+NB. --------------------------------------------------------
+NB. db_listkm — list k-means runs for a pca_run_id
+NB. y is pca_run_id (integer)
+NB. returns boxed nrows x 4 matrix (id;k;n_samples;created_at) or ''
+db_listkm =: 3 : 0
+  r =. ''
+  sql =. 'SELECT id,k,n_samples,created_at FROM km_runs'
+  sql =. sql , ' WHERE pca_run_id=' , (": {. , y)
+  sql =. sql , ' ORDER BY created_at DESC'
+  sh =. DB ddsel~ sql
+  if. _1 = sh do. r return. end.
+  rows =. ddfet sh , _1
+  nrows =. # rows
+  if. 0 = nrows do. r return. end.
+  r =. rows
+  r
+)
+
+NB. --------------------------------------------------------
+NB. db_getkm — fetch full k-means run by id
+NB. y is km_run_id (integer)
+NB. returns boxed row (id;pca_run_id;k;labels;centroids;n_samples;created_at) or ''
+db_getkm =: 3 : 0
+  r =. ''
+  sql =. 'SELECT id,pca_run_id,k,labels,centroids,n_samples,created_at'
+  sql =. sql , ' FROM km_runs WHERE id=' , (": {. , y)
+  sh =. DB ddsel~ sql
+  if. _1 = sh do. r return. end.
+  rows =. ddfet sh , _1
+  nrows =. # rows
+  if. 0 = nrows do. r return. end.
+  r =. {. rows
+  r
+)
+
+NB. --------------------------------------------------------
+NB. db_deletekm — delete a k-means run by id
+NB. y is km_run_id (integer); returns 1 on success, 0 on error
+db_deletekm =: 3 : 0
+  r =. 0
+  sql =. 'DELETE FROM km_runs WHERE id=' , (": {. , y)
   rc =. DB ddsql~ sql
   if. 0 = rc do. r =. 1 end.
   r

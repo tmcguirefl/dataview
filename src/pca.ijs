@@ -21,7 +21,7 @@ pca_num_to_json =: 3 : 0
   k  =. 0
   while. k < n do.
     if. k > 0 do. r =. r , ',' end.
-    r =. r , ": k { , y
+    r =. r , (": k { , y) rplc '_';'-'
     k =. >: k
   end.
   r =. r , ']'
@@ -82,29 +82,21 @@ pca_run =: 3 : 0
   qcols_json =. dltb > 4 { row
 
   NB. Parse the numeric matrix from JSON using dec_json (convert/json)
-  NB. dec_json returns a J nested array; for a 2-D numeric array it gives a boxed list of rows.
+  NB. dec_json on '[[r0c0,...],...]' returns a rank-1 boxed array where each
+  NB. item is a plain numeric vector (one row).  Stack them into a matrix.
   require 'convert/json'
   numrows_box =. dec_json_json_ raw_json
-  NB. numrows_box is a boxed list of rows; each row is a boxed list of numbers
   nrows_raw =. # numrows_box
   if. 0 = nrows_raw do.
     r =. '0' , JASEP , 'No numeric data in dataset (no quantitative columns or all rows dropped).'
     return.
   end.
-  NB. convert to numeric matrix: unbox each row, stack
-  row0  =. > 0 { numrows_box
-  ncols_raw =. # row0
-  nummat =. (nrows_raw , ncols_raw) $ 0
-  i =. 0
-  while. i < nrows_raw do.
-    nummat =. ((> i { numrows_box) (i,0)} nummat)
-    i =. >: i
-  end.
+  NB. Stack rows: open each row item (may be boxed scalar for 1-col data), then open to matrix
+  nummat =. > > &.> numrows_box
+  ncols_raw =. > 1 { $ nummat
 
-  NB. parse column names from qcols_json
-  colnames_box =. dec_json_json_ qcols_json
-  NB. colnames_box is a boxed list of strings
-  colnames =. colnames_box
+  NB. parse column names: dec_json on '["a","b"]' gives a boxed string vector
+  colnames =. dec_json_json_ qcols_json
 
   NB. guard: ncomp must be in 1..(ncols_raw-1)
   ncols_now =. ncols_raw
@@ -112,7 +104,7 @@ pca_run =: 3 : 0
     r =. '0' , JASEP , 'n_components must be at least 1.'
     return.
   end.
-  if. ncomp >= ncols_now do.
+  if. ncomp >: ncols_now do.
     r =. '0' , JASEP , 'n_components must be less than the number of quantitative columns (' , (": ncols_now) , ').'
     return.
   end.
@@ -126,7 +118,7 @@ pca_run =: 3 : 0
     r =. '0' , JASEP , 'After preprocessing, fewer than 2 columns remain.'
     return.
   end.
-  if. ncomp >= ncols do.
+  if. ncomp >: ncols do.
     ncomp =. ncols - 1
   end.
   if. nrows < 2 do.

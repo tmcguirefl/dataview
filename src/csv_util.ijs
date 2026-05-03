@@ -86,7 +86,7 @@ csv_detect_types =: 3 : 0
       NB. all numeric -- makenum unboxed everything
       n_numeric =. nne
     end.
-    if. (0 = nne) +. (n_numeric >= >. 0.8 * nne) do.
+    if. (0 = nne) +. (n_numeric >: >. 0.8 * nne) do.
       r =. r , 'q'
     else.
       r =. r , 'c'

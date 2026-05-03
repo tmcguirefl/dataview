@@ -30,6 +30,7 @@ NB. ── Tab bar ────────────────────�
 '<nav class="ms-tabs">'
 '<button class="ms-tab ms-tab-active" onclick="switchTab(''tab-data'')">Datasets</button>'
 '<button class="ms-tab" onclick="switchTab(''tab-pca'')">PCA</button>'
+'<button class="ms-tab" onclick="switchTab(''tab-clusters'')">Clusters</button>'
 '</nav>'
 
 '<main class="ms-main">'
@@ -152,6 +153,77 @@ NB. Loadings heatmap
 '</div>'
 '</div>'
 
+NB. ════════════════════════════════════════════════════════════════════════
+NB. TAB 3 — Clusters
+NB. ════════════════════════════════════════════════════════════════════════
+'<div id="tab-clusters" class="ms-tab-panel" style="display:none">'
+'<div class="ms-columns">'
+
+NB. ── Left panel: cluster run form + history ─────────────────────────────
+'<section class="ms-panel ms-left">'
+'<h2>Run K-Means</h2>'
+'<div class="ms-pca-form">'
+'<label>PCA Run</label>'
+'<select id="km-prid" class="ms-select">'
+'<option value="">— select a PCA run —</option>'
+'</select>'
+'<label style="margin-top:8px">k (clusters) <span class="ms-hint-inline">(2–10)</span></label>'
+'km_k' jhtext '3';4
+'<div class="ms-upload-actions" style="margin-top:12px">'
+'runkmeans' jhb 'Run K-Means'
+'<span id="km-msg" class="ms-msg"></span>'
+'</div>'
+'</div>'
+
+'<h2 style="margin-top:24px">Previous Runs</h2>'
+'<div id="km-runs-wrap">'
+'<p id="km-runs-empty" class="ms-hint">No cluster runs for this PCA run.</p>'
+'<table id="km-runs-table" class="ms-table" style="display:none">'
+'<thead><tr><th>k</th><th>Samples</th><th>Date</th><th></th></tr></thead>'
+'<tbody id="km-runs-tbody"></tbody>'
+'</table>'
+'</div>'
+
+'<h2 style="margin-top:24px">Compare PCA Runs</h2>'
+'<div class="ms-pca-form">'
+'<label>Run A</label>'
+'<select id="cmp-rid-a" class="ms-select"><option value="">— none —</option></select>'
+'<label style="margin-top:8px">Run B</label>'
+'<select id="cmp-rid-b" class="ms-select"><option value="">— none —</option></select>'
+'<div class="ms-upload-actions" style="margin-top:12px">'
+'compareruns' jhb 'Compare'
+'<span id="cmp-msg" class="ms-msg"></span>'
+'</div>'
+'</div>'
+'</section>'
+
+NB. ── Right panel: cluster scatter + comparison ──────────────────────────
+'<section class="ms-panel ms-right">'
+'<div id="km-results" style="display:none">'
+'<h2>Cluster Results <span id="km-run-label" class="ms-subtitle"></span></h2>'
+'<div id="km-count-summary" class="ms-qr-summary"></div>'
+'<div class="ms-plot-title">PC1 vs PC2 — coloured by cluster</div>'
+'<div id="plot-km-scatter" class="ms-plot"></div>'
+'</div>'
+'<div id="cmp-results" style="display:none">'
+'<h2>Run Comparison</h2>'
+'<div class="ms-cmp-row">'
+'<div>'
+'<div class="ms-plot-title" id="cmp-label-a"></div>'
+'<div id="plot-cmp-a" class="ms-plot"></div>'
+'</div>'
+'<div>'
+'<div class="ms-plot-title" id="cmp-label-b"></div>'
+'<div id="plot-cmp-b" class="ms-plot"></div>'
+'</div>'
+'</div>'
+'</div>'
+'<p id="km-hint" class="ms-hint">Select a PCA run, choose k, and click Run K-Means.</p>'
+'</section>'
+
+'</div>'
+'</div>'
+
 '</main>'
 
 NB. Hidden fields
@@ -159,6 +231,10 @@ NB. Hidden fields
 '<input type="hidden" id="dsid-view" name="dsid-view" value="">'
 '<input type="hidden" id="pca-run-id" name="pca-run-id" value="">'
 '<input type="hidden" id="pca-ds-id"  name="pca-ds-id"  value="">'
+'<input type="hidden" id="km-run-id"  name="km-run-id"  value="">'
+'<input type="hidden" id="km-prid-h"  name="km-prid-h"  value="">'
+'<input type="hidden" id="cmp-rid-a-h" name="cmp-rid-a-h" value="">'
+'<input type="hidden" id="cmp-rid-b-h" name="cmp-rid-b-h" value="">'
 
 NB. Hidden refresh button triggered on body load
 '<span style="display:none">'
@@ -245,19 +321,22 @@ textarea#csvdata { width:100%; padding:6px 8px; border:1px solid #ccc;
 .ms-plot-title { font-size:0.88rem; font-weight:600; color:#555;
   margin:16px 0 4px; }
 .ms-plot { width:100%; height:300px; }
+.ms-cmp-row { display:flex; gap:16px; }
+.ms-cmp-row > div { flex:1; min-width:0; }
 )
 
 NB. ── Client JavaScript ─────────────────────────────────────────────────────
 JS =: 0 : 0
 // ── Tab switching ─────────────────────────────────────────────────────────
 function switchTab(id) {
-  ['tab-data','tab-pca'].forEach(function(t) {
+  ['tab-data','tab-pca','tab-clusters'].forEach(function(t) {
     jbyid(t).style.display = t === id ? '' : 'none';
   });
   document.querySelectorAll('.ms-tab').forEach(function(btn) {
     btn.classList.toggle('ms-tab-active', btn.getAttribute('onclick').indexOf("'"+id+"'") !== -1);
   });
   if (id === 'tab-pca') refreshPcaDatasetDropdown();
+  if (id === 'tab-clusters') refreshKmPcaRunDropdown();
 }
 
 // ── Upload ──────────────────────────────────────────────────────────────────
@@ -479,6 +558,14 @@ function refreshPcaDatasetDropdown() {
 }
 
 function renderPcaRunsList(runs) {
+  // Cache all PCA runs for the cluster tab dropdown
+  if (!window._allPcaRuns) window._allPcaRuns = [];
+  runs.forEach(function(r) {
+    if (!window._allPcaRuns.find(function(x){return x.id===r.id;})) {
+      window._allPcaRuns.push(r);
+    }
+  });
+
   var tbody = jbyid('pca-runs-tbody');
   tbody.innerHTML = '';
   if (runs.length === 0) {
@@ -503,6 +590,10 @@ function renderPcaRunsList(runs) {
 }
 
 function renderPcaResults(s) {
+  // Cache for cluster tab use
+  window._currentPcarunId    = s.run_id;
+  window._currentPcaResults  = s;
+
   jbyid('pca-hint').style.display    = 'none';
   jbyid('pca-results').style.display = '';
 
@@ -572,6 +663,228 @@ function renderPcaResults(s) {
   }, {responsive: true, displaylogo: false});
 }
 
+// ── Run K-Means ───────────────────────────────────────────────────────────
+function ev_runkmeans_click() {
+  var prid = jbyid('km-prid').value;
+  var k    = jbyid('km_k').value.trim();
+  if (!prid) { showMsg('km-msg','Select a PCA run first.','err'); return; }
+  if (!k || isNaN(parseInt(k,10)) || parseInt(k,10) < 2) {
+    showMsg('km-msg','k must be an integer ≥ 2.','err'); return;
+  }
+  jbyid('km-prid-h').value = prid;
+  jbyid('km-run-id').value = '';
+  jform.jmid.value  = 'runkmeans';
+  jform.jtype.value = 'click';
+  jform['km_k'].value = k;
+  showMsg('km-msg','Running…','');
+  jdoajax(['km-prid-h','km_k'], '');
+}
+function ev_runkmeans_click_ajax(ts) {
+  if (ts[0]==='1') {
+    showMsg('km-msg','Done!','ok');
+    var tx = ts[2] ? JSON.parse(ts[2]) : null;
+    renderKmResults(JSON.parse(ts[1]), tx);
+    loadKmRuns(jbyid('km-prid-h').value);
+  } else {
+    showMsg('km-msg', ts[1], 'err');
+  }
+}
+
+// ── Load K-Means run ─────────────────────────────────────────────────────
+function loadKmRun(kmId) {
+  jbyid('km-run-id').value = kmId;
+  jform.jmid.value  = 'loadkmrun';
+  jform.jtype.value = 'click';
+  jdoajax(['km-run-id'], '');
+}
+function ev_loadkmrun_click_ajax(ts) {
+  if (ts[0]==='1') {
+    var tx = ts[2] ? JSON.parse(ts[2]) : null;
+    renderKmResults(JSON.parse(ts[1]), tx);
+    showMsg('km-msg','','');
+  } else {
+    showMsg('km-msg', ts[1], 'err');
+  }
+}
+
+// ── Delete K-Means run ───────────────────────────────────────────────────
+function deleteKmRun(kmId) {
+  jbyid('km-run-id').value = kmId;
+  jform.jmid.value  = 'delkmrun';
+  jform.jtype.value = 'click';
+  jdoajax(['km-run-id'], '');
+}
+function ev_delkmrun_click_ajax(ts) {
+  if (ts[0]==='1') loadKmRuns(jbyid('km-prid-h').value);
+  else showMsg('km-msg', ts[1], 'err');
+}
+
+// ── List K-Means runs ────────────────────────────────────────────────────
+function loadKmRuns(prid) {
+  if (!prid) return;
+  jbyid('km-prid-h').value = prid;
+  jform.jmid.value  = 'listkmruns';
+  jform.jtype.value = 'click';
+  jdoajax(['km-prid-h'], '');
+}
+function ev_listkmruns_click_ajax(ts) {
+  renderKmRunsList(JSON.parse(ts[0]));
+}
+
+// ── Compare PCA runs ─────────────────────────────────────────────────────
+function ev_compareruns_click() {
+  var ra = jbyid('cmp-rid-a').value;
+  var rb = jbyid('cmp-rid-b').value;
+  if (!ra || !rb) { showMsg('cmp-msg','Select both runs.','err'); return; }
+  jbyid('cmp-rid-a-h').value = ra;
+  jbyid('cmp-rid-b-h').value = rb;
+  jform.jmid.value  = 'compareruns';
+  jform.jtype.value = 'click';
+  showMsg('cmp-msg','Loading…','');
+  jdoajax(['cmp-rid-a-h','cmp-rid-b-h'], '');
+}
+function ev_compareruns_click_ajax(ts) {
+  if (ts[0]==='1') {
+    showMsg('cmp-msg','','');
+    renderComparison(JSON.parse(ts[1]), JSON.parse(ts[2]));
+  } else {
+    showMsg('cmp-msg', ts[1], 'err');
+  }
+}
+
+// ── Refresh K-Means PCA run dropdown ────────────────────────────────────
+function refreshKmPcaRunDropdown() {
+  // Collect all known PCA run IDs from the PCA runs table
+  // We store them as data attributes when renderPcaRunsList is called
+  var kmSel  = jbyid('km-prid');
+  var cmpSelA = jbyid('cmp-rid-a');
+  var cmpSelB = jbyid('cmp-rid-b');
+  var prevKm  = kmSel.value;
+  var prevA   = cmpSelA.value;
+  var prevB   = cmpSelB.value;
+  // Clear existing options
+  while (kmSel.options.length > 1) kmSel.remove(1);
+  while (cmpSelA.options.length > 1) cmpSelA.remove(1);
+  while (cmpSelB.options.length > 1) cmpSelB.remove(1);
+  // Read from stored run data
+  (window._allPcaRuns || []).forEach(function(r) {
+    var lbl = 'Run #' + r.id + ' (' + r.n_components + ' PC, ' + r.ts.substring(0,10) + ')';
+    [kmSel, cmpSelA, cmpSelB].forEach(function(sel, si) {
+      var opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = lbl;
+      if ((si===0 && String(r.id)===prevKm) ||
+          (si===1 && String(r.id)===prevA)  ||
+          (si===2 && String(r.id)===prevB)) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  });
+}
+
+// ── Render cluster scatter ────────────────────────────────────────────────
+var CLUSTER_COLORS = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6',
+                      '#1abc9c','#e67e22','#34495e','#e91e63','#00bcd4'];
+
+function renderKmResults(s, transformed) {
+  jbyid('km-hint').style.display    = 'none';
+  jbyid('km-results').style.display = '';
+  jbyid('cmp-results').style.display = 'none';
+  jbyid('km-run-label').textContent = '— k=' + s.k + ', ' + s.n_samples + ' samples';
+
+  // Cluster size badges — compute from labels if counts not present
+  var div = jbyid('km-count-summary');
+  div.innerHTML = '';
+  var counts = s.counts;
+  if (!counts) {
+    counts = [];
+    for (var ci=0; ci<s.k; ci++) counts.push(0);
+    s.labels.forEach(function(lbl) { if (lbl>=0 && lbl<s.k) counts[lbl]++; });
+  }
+  counts.forEach(function(c, i) {
+    var sp = document.createElement('span');
+    sp.className = 'ms-badge';
+    sp.style.background = CLUSTER_COLORS[i % CLUSTER_COLORS.length];
+    sp.style.color = '#fff';
+    sp.textContent = 'C' + i + ': ' + c;
+    div.appendChild(sp);
+  });
+
+  if (transformed && transformed.length > 0 && transformed[0].length >= 2) {
+    _drawKmScatter(s, transformed);
+  } else {
+    jbyid('plot-km-scatter').innerHTML =
+      '<p class="ms-hint" style="padding:8px">Need ≥2 PCA components for coloured scatter.</p>';
+  }
+}
+
+function _drawKmScatter(km, transformed) {
+  if (!transformed || transformed.length === 0 || transformed[0].length < 2) {
+    jbyid('plot-km-scatter').innerHTML =
+      '<p class="ms-hint" style="padding:8px">Need ≥2 PCA components for coloured scatter.</p>';
+    return;
+  }
+  var traces = [];
+  for (var ci = 0; ci < km.k; ci++) {
+    var xs = [], ys = [];
+    km.labels.forEach(function(lbl, i) {
+      if (lbl === ci) { xs.push(transformed[i][0]); ys.push(transformed[i][1]); }
+    });
+    traces.push({
+      x: xs, y: ys, mode: 'markers', name: 'C' + ci,
+      marker: {size: 7, color: CLUSTER_COLORS[ci % CLUSTER_COLORS.length], opacity: 0.85}
+    });
+  }
+  Plotly.newPlot('plot-km-scatter', traces, {
+    margin: {t:10,r:10,b:45,l:50},
+    xaxis: {title:'PC1'}, yaxis: {title:'PC2'},
+    legend: {orientation:'h'}
+  }, {responsive: true, displaylogo: false});
+}
+
+function renderKmRunsList(runs) {
+  var tbody = jbyid('km-runs-tbody');
+  tbody.innerHTML = '';
+  if (runs.length === 0) {
+    jbyid('km-runs-empty').style.display = '';
+    jbyid('km-runs-table').style.display = 'none';
+    return;
+  }
+  jbyid('km-runs-empty').style.display = 'none';
+  jbyid('km-runs-table').style.display = '';
+  runs.forEach(function(r) {
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + r.k + '</td>' +
+      '<td>' + r.n_samples + '</td>' +
+      '<td>' + r.ts.substring(0,10) + '</td>' +
+      '<td><div class="ms-actions">' +
+        '<button class="ms-load-run" onclick="loadKmRun(' + r.id + ')">Load</button>' +
+        '<button class="ms-del"      onclick="deleteKmRun(' + r.id + ')">Del</button>' +
+      '</div></td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function renderComparison(runA, runB) {
+  jbyid('cmp-results').style.display = '';
+  jbyid('km-hint').style.display = 'none';
+  var makeScree = function(s, elId, labelEl) {
+    jbyid(labelEl).textContent = 'Run #' + s.id + ' — ' + s.n_components + ' PCs, ' + s.n_samples + ' samples';
+    var allEv = s.all_ev;
+    Plotly.newPlot(elId, [{
+      x: allEv.map(function(_,i){return 'PC'+(i+1);}),
+      y: allEv, type: 'bar',
+      marker: {color: '#3498db'}
+    }], {
+      margin: {t:10,r:6,b:40,l:45},
+      xaxis: {title:'Component'},
+      yaxis: {title:'% Var'}
+    }, {responsive: true, displaylogo: false});
+  };
+  makeScree(runA, 'plot-cmp-a', 'cmp-label-a');
+  makeScree(runB, 'plot-cmp-b', 'cmp-label-b');
+}
+
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -585,6 +898,16 @@ document.addEventListener('DOMContentLoaded', function() {
     else {
       jbyid('pca-runs-empty').style.display = '';
       jbyid('pca-runs-table').style.display = 'none';
+    }
+  });
+
+  jbyid('km-prid').addEventListener('change', function() {
+    var id = this.value;
+    jbyid('km-prid-h').value = id;
+    if (id) loadKmRuns(id);
+    else {
+      jbyid('km-runs-empty').style.display = '';
+      jbyid('km-runs-table').style.display = 'none';
     }
   });
 });
@@ -623,6 +946,16 @@ jev_get =: jev =: 3 : 0
     ms_loadpcarun''
   elseif. 'delpcarun_click' -: mid,'_',type do.
     ms_delpcarun''
+  elseif. 'runkmeans_click' -: mid,'_',type do.
+    ms_runkmeans''
+  elseif. 'listkmruns_click' -: mid,'_',type do.
+    ms_listkmruns''
+  elseif. 'loadkmrun_click' -: mid,'_',type do.
+    ms_loadkmrun''
+  elseif. 'delkmrun_click' -: mid,'_',type do.
+    ms_delkmrun''
+  elseif. 'compareruns_click' -: mid,'_',type do.
+    ms_compareruns''
   else.
     jhrajax ''
   end.
@@ -805,5 +1138,85 @@ ms_delpcarun =: 3 : 0
     jhrajax '1'
   else.
     jhrajax '0',JASEP,'Delete failed.'
+  end.
+)
+
+NB. ── Run K-Means handler ──────────────────────────────────────────────────────
+NB. Returns km summary JSON + pca tx_json so client can draw scatter immediately
+ms_runkmeans =: 3 : 0
+  r =. ''
+  try.
+  prid =. ". dltb getv 'km-prid-h'
+  k    =. ". dltb getv 'km_k'
+  result =. kmeans_run_jhs_ prid ; k
+  if. (2 = 3!:0 result) *. '0' -: {. result do.
+    jhrajax result
+    return.
+  end.
+  summary_json =. dltb > 2 { result
+  NB. fetch pca transformed for scatter
+  pca_row =. db_getpcarun_jhs_ prid
+  tx_json =. ''
+  if. 0 < # pca_row do.
+    tx_json =. dltb > 6 { pca_row
+  end.
+  jhrajax '1',JASEP,summary_json,JASEP,tx_json
+  catch.
+    jhrajax '0',JASEP,'K-Means error: ',13!:12''
+  end.
+)
+
+NB. ── List K-Means runs handler ──────────────────────────────────────────────
+ms_listkmruns =: 3 : 0
+  prid =. ". dltb getv 'km-prid-h'
+  jhrajax kmeans_listjson_jhs_ prid
+)
+
+NB. ── Load K-Means run handler ────────────────────────────────────────────────
+NB. Returns km JSON + pca tx_json so client can draw the scatter
+ms_loadkmrun =: 3 : 0
+  kid  =. ". dltb getv 'km-run-id'
+  krow =. db_getkm_jhs_ kid
+  if. 0 = # krow do.
+    jhrajax '0',JASEP,'Run not found.'
+    return.
+  end.
+  json =. kmeans_getjson_jhs_ kid
+  NB. also fetch pca run's transformed for the scatter
+  prid      =. > > 1 { krow
+  pca_row   =. db_getpcarun_jhs_ prid
+  tx_json   =. ''
+  if. 0 < # pca_row do.
+    tx_json =. dltb > 6 { pca_row
+  end.
+  jhrajax '1',JASEP,json,JASEP,tx_json
+)
+
+NB. ── Delete K-Means run handler ────────────────────────────────────────────
+ms_delkmrun =: 3 : 0
+  kid =. ". dltb getv 'km-run-id'
+  ok  =. db_deletekm_jhs_ kid
+  if. ok do.
+    jhrajax '1'
+  else.
+    jhrajax '0',JASEP,'Delete failed.'
+  end.
+)
+
+NB. ── Compare PCA runs handler ──────────────────────────────────────────────
+ms_compareruns =: 3 : 0
+  r =. ''
+  try.
+  rid_a =. ". dltb getv 'cmp-rid-a-h'
+  rid_b =. ". dltb getv 'cmp-rid-b-h'
+  json_a =. pca_getjson_jhs_ rid_a
+  json_b =. pca_getjson_jhs_ rid_b
+  if. (0 = # json_a) +. (0 = # json_b) do.
+    jhrajax '0',JASEP,'One or both runs not found.'
+    return.
+  end.
+  jhrajax '1',JASEP,json_a,JASEP,json_b
+  catch.
+    jhrajax '0',JASEP,'Compare error: ',13!:12''
   end.
 )
